@@ -6,6 +6,20 @@ import { useState, useEffect, useRef, useCallback } from "react";
 const SUPABASE_URL = "https://pyjqtkngvdajpsgiwcdm.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5anF0a25ndmRhanBzZ2l3Y2RtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MzcxMjEsImV4cCI6MjA5NzIxMzEyMX0.iXKKfKSxv_QTiF9J0hSh2vDlylHai1AwfIEvHJCKxWQ";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TELEGRAM BOT — send notifications to user's private chat
+// ─────────────────────────────────────────────────────────────────────────────
+// Sends via Supabase Edge Function (browser can't call Telegram API directly — CORS)
+const sendBotMessage = async (chatId, text) => {
+  try {
+    await fetch(SUPABASE_URL + "/functions/v1/send-tg", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + SUPABASE_KEY },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  } catch(e) { console.error("Bot notify failed:", e); }
+};
+
 const sb = {
   from: (table) => ({
     _table: table,
@@ -303,52 +317,68 @@ function BottomNav({active,onChange,chatUnread}){
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MAP SCREEN
+// MAP SCREEN — loads computers + bookings from Supabase
 // ─────────────────────────────────────────────────────────────────────────────
-function MapScreen({onBook}){
+function MapScreen({onBook,computers,zones,bookings}){
   const [sel,setSel]=useState(null);
-  const free=COMPUTERS.filter(c=>c.status==="available").length;
-  const busy=COMPUTERS.filter(c=>c.status==="busy").length;
-  const zones=[{id:"VIP",label:"VIP ЗОНА",color:C.yellow},{id:"STANDARD",label:"STANDARD",color:C.neon},{id:"BUDGET",label:"BUDGET",color:C.muted}];
-  const selPC=COMPUTERS.find(c=>c.id===sel);
+
+  // Compute live status: busy if active booking now, reserved if future booking
+  const now=new Date();
+  const enriched=(computers||[]).map(pc=>{
+    const pcBookings=(bookings||[]).filter(b=>b.pc_number===pc.number&&b.status!=="cancelled"&&b.status!=="done");
+    const active=pcBookings.find(b=>new Date(b.starts_at)<=now&&new Date(b.ends_at)>now);
+    const upcoming=pcBookings.find(b=>new Date(b.starts_at)>now);
+    let status=pc.status==="off"?"off":active?"busy":upcoming?"reserved":"available";
+    const minutesLeft=active?Math.floor((new Date(active.ends_at)-now)/60000):null;
+    return {...pc, liveStatus:status, minutesLeft};
+  });
+
+  const free=enriched.filter(c=>c.liveStatus==="available").length;
+  const busy=enriched.filter(c=>c.liveStatus==="busy").length;
+  const reserved=enriched.filter(c=>c.liveStatus==="reserved").length;
+  const selPC=enriched.find(c=>c.id===sel);
+
+  const getS=(status)=>ST[status]||ST.available;
 
   return(
     <div style={{padding:"0 18px",overflowY:"auto",flex:1}}>
-      <div style={{display:"flex",gap:10,marginTop:16}}>
-        {[{val:free,label:"СВОБОДНО",color:C.neon},{val:busy,label:"ЗАНЯТО",color:C.red}].map(s=>(
-          <div key={s.label} style={{flex:1,background:`${s.color}10`,border:`1px solid ${s.color}30`,borderRadius:12,padding:"14px 16px",position:"relative",overflow:"hidden"}}>
-            <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:s.color,boxShadow:`0 0 8px ${s.color}`}}/>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:s.color,lineHeight:1,textShadow:`0 0 16px ${s.color}60`}}>{s.val}</div>
-            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.15em",marginTop:2}}>{s.label}</div>
+      <div style={{display:"flex",gap:8,marginTop:16}}>
+        {[{val:free,label:"СВОБ",color:C.neon},{val:busy,label:"ЗАНЯТО",color:C.red},{val:reserved,label:"РЕЗЕРВ",color:C.yellow}].map(s=>(
+          <div key={s.label} style={{flex:1,background:`${s.color}10`,border:`1px solid ${s.color}30`,borderRadius:12,padding:"10px 8px",position:"relative",overflow:"hidden",textAlign:"center"}}>
+            <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:s.color}}/>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:34,color:s.color,lineHeight:1}}>{s.val}</div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted,letterSpacing:"0.1em",marginTop:2}}>{s.label}</div>
           </div>
         ))}
       </div>
-      <div style={{display:"flex",gap:14,marginTop:12}}>
+      <div style={{display:"flex",gap:14,marginTop:10}}>
         {Object.entries(ST).map(([k,v])=>(
           <div key={k} style={{display:"flex",alignItems:"center",gap:5}}>
-            <div style={{width:8,height:8,background:v.color,borderRadius:2,boxShadow:`0 0 4px ${v.color}`}}/>
+            <div style={{width:8,height:8,background:v.color,borderRadius:2}}/>
             <span style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted,letterSpacing:"0.1em"}}>{v.label}</span>
           </div>
         ))}
       </div>
 
-      {zones.map(zone=>{
-        const pcs=COMPUTERS.filter(c=>c.zone===zone.id);
+      {(zones||[]).map(zone=>{
+        const pcs=enriched.filter(c=>c.zone_id===zone.id);
+        if(!pcs.length)return null;
         return(
           <div key={zone.id}>
-            <SectionHead label={zone.label} color={zone.color}/>
+            <SectionHead label={zone.name} color={zone.color||C.neon}/>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
               {pcs.map(pc=>{
-                const s=ST[pc.status]; const isS=sel===pc.id;
+                const s=getS(pc.liveStatus); const isS=sel===pc.id;
+                const canSelect=pc.liveStatus==="available";
                 return(
-                  <button key={pc.id} onClick={()=>setSel(isS?null:pc.id)} disabled={pc.status==="busy"}
+                  <button key={pc.id} onClick={()=>canSelect&&setSel(isS?null:pc.id)}
                     style={{border:`1.5px solid ${isS?s.color:s.color+"40"}`,borderRadius:10,background:isS?s.bg+"cc":s.bg,
-                      padding:"10px 4px 8px",cursor:pc.status==="busy"?"default":"pointer",
+                      padding:"10px 4px 8px",cursor:canSelect?"pointer":"default",
                       display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all 0.15s",
-                      boxShadow:isS?`0 0 14px ${s.color}50`:"none"}}>
-                    <span style={{fontSize:17}}>🖥</span>
-                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:14,color:s.color,lineHeight:1}}>#{pc.id}</span>
-                    <span style={{fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted}}>{pc.timeLeft?`${pc.timeLeft}м`:"···"}</span>
+                      boxShadow:isS?`0 0 14px ${s.color}50`:"none",opacity:pc.liveStatus==="off"?0.4:1}}>
+                    <span style={{fontSize:17}}>{zone.name==="PLAYSTATION"?"🎮":"🖥"}</span>
+                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:14,color:s.color,lineHeight:1}}>#{pc.number}</span>
+                    <span style={{fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted}}>{pc.minutesLeft?`${pc.minutesLeft}м`:"···"}</span>
                   </button>
                 );
               })}
@@ -362,10 +392,10 @@ function MapScreen({onBook}){
           <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${C.neon},transparent)`}}/>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
             <div>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:C.text,lineHeight:1}}>ПК <span style={{color:C.neon}}>#{selPC.id}</span></div>
-              <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,marginTop:3,letterSpacing:"0.08em"}}>{selPC.zone} ZONE</div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:C.text,lineHeight:1}}>ПК <span style={{color:C.neon}}>#{selPC.number}</span></div>
+              <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,marginTop:3}}>{(zones||[]).find(z=>z.id===selPC.zone_id)?.name} ZONE</div>
             </div>
-            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:ST[selPC.status].color,background:ST[selPC.status].bg,border:`1px solid ${ST[selPC.status].color}50`,padding:"4px 12px",borderRadius:20,fontWeight:700,letterSpacing:"0.1em"}}>{ST[selPC.status].label}</div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:getS(selPC.liveStatus).color,background:getS(selPC.liveStatus).bg,border:`1px solid ${getS(selPC.liveStatus).color}50`,padding:"4px 12px",borderRadius:20,fontWeight:700}}>{getS(selPC.liveStatus).label}</div>
           </div>
           <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted,marginBottom:14,lineHeight:1.5}}>{selPC.spec}</div>
           <NeonBtn onClick={()=>onBook(selPC)}>ЗАБРОНИРОВАТЬ →</NeonBtn>
@@ -377,34 +407,79 @@ function MapScreen({onBook}){
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BOOK SCREEN
+// BOOK SCREEN — real bookings with conflict check
 // ─────────────────────────────────────────────────────────────────────────────
-function BookScreen({preSelected}){
-  const [pc,setPc]=useState(preSelected?.id?.toString()||"");
-  const [date,setDate]=useState("");
+function BookScreen({preSelected,onSessionBooked,onBookingCreated,computers,zones,bookings,user}){
+  const [pcId,setPcId]=useState(preSelected?.id||"");
+  const [date,setDate]=useState(()=>new Date().toISOString().slice(0,10));
   const [time,setTime]=useState("");
   const [hours,setHours]=useState("2");
   const [done,setDone]=useState(false);
   const [loading,setLoading]=useState(false);
-  const freePCs=COMPUTERS.filter(c=>c.status==="available");
-  const ready=pc&&date&&time;
+  const [conflict,setConflict]=useState(false);
+  const [bookedInfo,setBookedInfo]=useState(null);
+
+  const availablePCs=(computers||[]).filter(c=>c.status!=="off");
+  const ready=pcId&&date&&time;
   const price=parseInt(hours)*30;
+
+  // Check for booking conflicts
+  useEffect(()=>{
+    if(!pcId||!date||!time)return;
+    const starts=new Date(`${date}T${time}`);
+    const ends=new Date(starts.getTime()+parseInt(hours)*3600000);
+    const hasConflict=(bookings||[]).some(b=>
+      b.computer_id===pcId&&
+      b.status!=="cancelled"&&b.status!=="done"&&
+      new Date(b.starts_at)<ends&&new Date(b.ends_at)>starts
+    );
+    setConflict(hasConflict);
+  },[pcId,date,time,hours,bookings]);
+
+  const handleBook=async()=>{
+    if(!ready||loading||conflict||!user)return;
+    setLoading(true);
+    const starts=new Date(`${date}T${time}`);
+    const ends=new Date(starts.getTime()+parseInt(hours)*3600000);
+    const pc=(computers||[]).find(c=>c.id===pcId);
+    await sb.from("bookings").insert({
+      user_id:user.id,
+      computer_id:pcId,
+      pc_number:pc?.number||0,
+      starts_at:starts.toISOString(),
+      ends_at:ends.toISOString(),
+      duration_hours:parseInt(hours),
+      status:"pending",
+    });
+    const now=new Date();
+    if(starts<=now&&ends>now){
+      // Starts now — activate immediately + send TG confirmation
+      await onSessionBooked(pc?.number||0,parseInt(hours),starts,ends);
+    } else {
+      // Future booking — send confirmation + schedule reminder
+      await onBookingCreated(pc?.number||0,parseInt(hours),starts);
+    }
+    setBookedInfo({pc:pc?.number||0,date,time,hours,price});
+    setLoading(false);
+    setDone(true);
+  };
 
   const inp={width:"100%",background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none",colorScheme:"dark"};
   const lbl={fontFamily:"'Oswald',sans-serif",fontSize:10,letterSpacing:"0.18em",color:C.muted,display:"block",marginBottom:6};
 
-  if(done) return(
+  if(done&&bookedInfo) return(
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,padding:24,textAlign:"center"}}>
       <div style={{fontSize:64,filter:`drop-shadow(0 0 20px ${C.neon})`,marginBottom:16}}>✅</div>
       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:34,color:C.neon,letterSpacing:"0.05em",textShadow:`0 0 18px ${C.neonGlow}`,marginBottom:8}}>БРОНЬ ПРИНЯТА!</div>
       <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.muted,lineHeight:1.8,marginBottom:20}}>
-        ПК #{pc} · {date} · {time}<br/>
-        <span style={{color:C.neon,fontSize:22,fontFamily:"'Bebas Neue',sans-serif"}}>{hours} ЧАС · {price} РУБ</span>
+        ПК #{bookedInfo.pc} · {bookedInfo.date} · {bookedInfo.time}<br/>
+        <span style={{color:C.neon,fontSize:22,fontFamily:"'Bebas Neue',sans-serif"}}>{bookedInfo.hours} ЧАС · {bookedInfo.price} РУБ</span>
       </div>
       <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:14,padding:16,fontSize:12,color:C.muted,lineHeight:1.7,marginBottom:20,fontFamily:"'Inter',sans-serif"}}>
-        Назови имя на стойке или покажи этот экран 👾
+        🔔 Напоминание придёт за 30 минут до начала<br/>
+        Покажи этот экран на стойке 👾
       </div>
-      <button onClick={()=>{setDone(false);setPc("");setDate("");setTime("");}} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"11px 28px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13,letterSpacing:"0.1em"}}>← НОВАЯ БРОНЬ</button>
+      <button onClick={()=>{setDone(false);setPcId("");setTime("");}} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"11px 28px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13,letterSpacing:"0.1em"}}>← НОВАЯ БРОНЬ</button>
     </div>
   );
 
@@ -414,15 +489,18 @@ function BookScreen({preSelected}){
         <div style={{marginTop:16,background:"rgba(57,255,20,0.07)",border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"12px 16px",display:"flex",alignItems:"center",gap:12}}>
           <span style={{fontSize:22}}>🖥</span>
           <div>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon}}>ПК #{preSelected.id} ВЫБРАН</div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon}}>ПК #{preSelected.number} ВЫБРАН</div>
             <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{preSelected.spec}</div>
           </div>
         </div>
       )}
       <SectionHead label="ВЫБОР КОМПЬЮТЕРА"/>
-      <select value={pc} onChange={e=>setPc(e.target.value)} style={{...inp,appearance:"none",marginBottom:14}}>
+      <select value={pcId} onChange={e=>setPcId(e.target.value)} style={{...inp,appearance:"none",marginBottom:14}}>
         <option value="">Выбери ПК...</option>
-        {freePCs.map(c=><option key={c.id} value={c.id}>ПК #{c.id} — {c.zone} — {c.spec.split("·")[0].trim()}</option>)}
+        {availablePCs.map(c=>{
+          const zone=(zones||[]).find(z=>z.id===c.zone_id);
+          return <option key={c.id} value={c.id}>ПК #{c.number} — {zone?.name||""} — {(c.spec||"").split("·")[0].trim()}</option>;
+        })}
       </select>
       <SectionHead label="ВРЕМЯ СЕССИИ"/>
       <label style={lbl}>ДАТА</label>
@@ -435,7 +513,8 @@ function BookScreen({preSelected}){
           </select>
         </div>
       </div>
-      {ready&&(
+      {conflict&&<div style={{marginTop:12,background:"rgba(255,45,45,0.1)",border:"1px solid rgba(255,45,45,0.3)",borderRadius:10,padding:"10px 14px",fontFamily:"'Inter',sans-serif",fontSize:12,color:C.red}}>⚠️ Этот компьютер уже забронирован на выбранное время</div>}
+      {ready&&!conflict&&(
         <div className="slide-up" style={{marginTop:16,background:"rgba(57,255,20,0.06)",border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
             <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.1em"}}>К ОПЛАТЕ</div>
@@ -445,7 +524,7 @@ function BookScreen({preSelected}){
         </div>
       )}
       <div style={{marginTop:16}}>
-        <NeonBtn onClick={()=>{if(!ready||loading)return;setLoading(true);setTimeout(()=>{setLoading(false);setDone(true);},1000);}} disabled={!ready||loading}>
+        <NeonBtn onClick={handleBook} disabled={!ready||loading||conflict}>
           {loading?"БРОНИРУЕМ...":"ПОДТВЕРДИТЬ БРОНЬ"}
         </NeonBtn>
       </div>
@@ -458,13 +537,13 @@ function BookScreen({preSelected}){
 // ─────────────────────────────────────────────────────────────────────────────
 // MENU SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function MenuScreen({balance,onBalanceChange,onOrderNotify,menuCats}){
+function MenuScreen({balance,onBalanceChange,onOrderNotify,menuCats,activeSession}){
   const [cat,setCat]=useState("drinks");
   const [cart,setCart]=useState({});
   const [payMethod,setPayMethod]=useState("balance"); // "balance" | "cash"
   const [orderDone,setOrderDone]=useState(false);
   const [showCart,setShowCart]=useState(false);
-  const [myPC]=useState(7);
+  const myPC=activeSession?.pc_number||null;
 
   const addItem=(id)=>setCart(c=>({...c,[id]:(c[id]||0)+1}));
   const removeItem=(id)=>setCart(c=>{const n={...c};if(n[id]>1)n[id]--;else delete n[id];return n;});
@@ -476,16 +555,19 @@ function MenuScreen({balance,onBalanceChange,onOrderNotify,menuCats}){
 
   const currentCat=menuCats.find(c=>c.id===cat);
 
+  const [confirmedTotal,setConfirmedTotal]=useState(0);
   const confirmOrder=()=>{
     if(payMethod==="balance"&&balance<cartTotal)return;
-    if(payMethod==="balance")onBalanceChange(-cartTotal);
-    setCart({});setShowCart(false);setOrderDone(true);
+    const total=cartTotal;
+    setConfirmedTotal(total);
     const cartItems=Object.entries(cart).map(([id,qty])=>{
       const item=menuCats.flatMap(cat=>cat.items).find(i=>i.id===id);
       return item?{name:item.name,emoji:item.emoji,price:item.price,qty}:null;
     }).filter(Boolean);
-    onOrderNotify(myPC,cartTotal,payMethod,cartItems);
-    setTimeout(()=>setOrderDone(false),4000);
+    if(payMethod==="balance")onBalanceChange(-total);
+    onOrderNotify(myPC,total,payMethod,cartItems);
+    setCart({});setShowCart(false);setOrderDone(true);
+    setTimeout(()=>setOrderDone(false),5000);
   };
 
   if(orderDone) return(
@@ -496,8 +578,9 @@ function MenuScreen({balance,onBalanceChange,onOrderNotify,menuCats}){
         Принесём прямо к ПК #{myPC}<br/>
         <span style={{color:C.neon}}>Ожидай 5–10 минут</span>
       </div>
-      {payMethod==="balance"&&<div style={{marginTop:12,fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted}}>Списано с баланса: <span style={{color:C.yellow}}>{cartTotal} руб</span></div>}
-      {payMethod==="cash"&&<div style={{marginTop:12,fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted}}>Оплата наличными при получении: <span style={{color:C.yellow}}>{cartTotal} руб</span></div>}
+      {payMethod==="balance"&&<div style={{marginTop:12,fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted}}>Списано с баланса: <span style={{color:C.yellow}}>{confirmedTotal} руб</span></div>}
+      {payMethod==="cash"&&<div style={{marginTop:12,fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted}}>Оплата наличными при получении: <span style={{color:C.yellow}}>{confirmedTotal} руб</span></div>}
+      {!myPC&&<div style={{marginTop:12,background:"rgba(255,214,0,0.1)",border:"1px solid rgba(255,214,0,0.3)",borderRadius:10,padding:"10px 14px",fontFamily:"'Inter',sans-serif",fontSize:12,color:C.yellow}}>⚠️ У тебя нет активной сессии. Забронируй ПК во вкладке ⚡</div>}
     </div>
   );
 
@@ -655,53 +738,26 @@ function MenuScreen({balance,onBalanceChange,onOrderNotify,menuCats}){
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED CHAT UI (used by both user ChatScreen and admin AdminChat)
 // ─────────────────────────────────────────────────────────────────────────────
-function ChatUI({msgs,onSend,isAdmin,typing,quickReplies}){
+// Body without header — used standalone in admin (which has its own header)
+function ChatUIBody({msgs,onSend,isAdmin,typing,quickReplies,noBottomMargin}){
   const [input,setInput]=useState("");
   const endRef=useRef(null);
   useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[msgs,typing]);
-
   const send=()=>{if(!input.trim())return;onSend(input.trim());setInput("");};
 
   return(
-    <div style={{display:"flex",flexDirection:"column",flex:1,minHeight:0}}>
-      {/* Header */}
-      <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.neonBorder}`,display:"flex",alignItems:"center",gap:12,flexShrink:0,background:"rgba(57,255,20,0.02)"}}>
-        <div style={{width:42,height:42,borderRadius:12,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`2px solid ${C.neon}50`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>
-          {isAdmin?"👾":"🎮"}
-        </div>
-        <div>
-          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:15,color:C.text,fontWeight:700}}>
-            {isAdmin?"АРТЁМ (ПК #7)":"LEVEL UP ADMIN"}
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:5,marginTop:2}}>
-            <div style={{width:7,height:7,borderRadius:"50%",background:C.neon,boxShadow:`0 0 6px ${C.neon}`}} className="blink"/>
-            <span style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.neon}}>
-              {isAdmin?"в сети · ПК #7":"онлайн · быстро отвечает"}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Messages */}
+    <>
       <div style={{flex:1,overflowY:"auto",padding:"14px 18px",display:"flex",flexDirection:"column",gap:10}}>
         {msgs.map(msg=>{
-          // from user's perspective: "user" msgs are theirs (right), "admin" is left
-          // from admin's perspective: flip — "admin" msgs are theirs (right), "user" is left
           const isMine = isAdmin ? msg.from==="admin" : msg.from==="user";
-          const avatarEmoji = isAdmin ? "👾" : "🎮";
+          const avatarEmoji = isAdmin ? "🎮" : "👾";
           return(
             <div key={msg.id} className="msg-in" style={{display:"flex",justifyContent:isMine?"flex-end":"flex-start"}}>
               {!isMine&&(
                 <div style={{width:32,height:32,borderRadius:10,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`1px solid ${C.neon}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,marginRight:8,flexShrink:0,alignSelf:"flex-end"}}>{avatarEmoji}</div>
               )}
               <div style={{maxWidth:"72%"}}>
-                <div style={{
-                  background:isMine?`linear-gradient(135deg,#1a4d00,#2d8500)`:C.card,
-                  border:`1px solid ${isMine?C.neon+"50":C.neonBorder}`,
-                  borderRadius:isMine?"16px 16px 4px 16px":"16px 16px 16px 4px",
-                  padding:"10px 14px",
-                  boxShadow:isMine?`0 0 12px rgba(57,255,20,0.2)`:"none",
-                }}>
+                <div style={{background:isMine?`linear-gradient(135deg,#1a4d00,#2d8500)`:C.card,border:`1px solid ${isMine?C.neon+"50":C.neonBorder}`,borderRadius:isMine?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"10px 14px",boxShadow:isMine?`0 0 12px rgba(57,255,20,0.2)`:"none"}}>
                   <div style={{fontFamily:"'Inter',sans-serif",fontSize:14,color:C.text,lineHeight:1.5}}>{msg.text}</div>
                 </div>
                 <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted,marginTop:3,textAlign:isMine?"right":"left"}}>{msg.time}</div>
@@ -711,22 +767,14 @@ function ChatUI({msgs,onSend,isAdmin,typing,quickReplies}){
         })}
         {typing&&(
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <div style={{width:32,height:32,borderRadius:10,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`1px solid ${C.neon}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>
-              {isAdmin?"👾":"🎮"}
-            </div>
+            <div style={{width:32,height:32,borderRadius:10,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`1px solid ${C.neon}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>{isAdmin?"🎮":"👾"}</div>
             <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:"16px 16px 16px 4px",padding:"10px 16px"}}>
-              <div style={{display:"flex",gap:4}}>
-                {[0,1,2].map(i=>(
-                  <div key={i} style={{width:7,height:7,borderRadius:"50%",background:C.neon,opacity:0.7,animation:`blink 1.2s ${i*0.3}s infinite`}}/>
-                ))}
-              </div>
+              <div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:C.neon,opacity:0.7,animation:`blink 1.2s ${i*0.3}s infinite`}}/>)}</div>
             </div>
           </div>
         )}
         <div ref={endRef}/>
       </div>
-
-      {/* Quick replies */}
       {quickReplies&&(
         <div style={{padding:"8px 18px 6px",display:"flex",gap:6,overflowX:"auto",flexShrink:0}}>
           {quickReplies.map(q=>(
@@ -734,19 +782,29 @@ function ChatUI({msgs,onSend,isAdmin,typing,quickReplies}){
           ))}
         </div>
       )}
-
-      {/* Input */}
-      <div style={{padding:"8px 18px 12px",paddingBottom:"calc(12px + env(safe-area-inset-bottom))",display:"flex",gap:10,flexShrink:0,borderTop:`1px solid ${C.neonBorder}`,background:C.bg,marginBottom:58}}>
-        <input
-          value={input} onChange={e=>setInput(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&send()}
-          placeholder={isAdmin?"Ответить игроку...":"Напиши сообщение..."}
-          style={{flex:1,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none"}}
-        />
-        <button onClick={send} style={{width:46,height:46,borderRadius:12,background:`linear-gradient(135deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}50`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,boxShadow:`0 0 12px ${C.neonGlow}`}}>
-          ➤
-        </button>
+      <div style={{padding:"8px 18px 12px",paddingBottom:noBottomMargin?"12px":"calc(12px + env(safe-area-inset-bottom))",display:"flex",gap:10,flexShrink:0,borderTop:`1px solid ${C.neonBorder}`,background:C.bg,marginBottom:noBottomMargin?0:58}}>
+        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder={isAdmin?"Ответить игроку...":"Напиши сообщение..."} style={{flex:1,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none"}}/>
+        <button onClick={send} style={{width:46,height:46,borderRadius:12,background:`linear-gradient(135deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}50`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,boxShadow:`0 0 12px ${C.neonGlow}`}}>➤</button>
       </div>
+    </>
+  );
+}
+
+// User-side chat with fixed admin header
+function ChatUI({msgs,onSend,isAdmin,typing,quickReplies}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",flex:1,minHeight:0}}>
+      <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.neonBorder}`,display:"flex",alignItems:"center",gap:12,flexShrink:0,background:"rgba(57,255,20,0.02)"}}>
+        <div style={{width:42,height:42,borderRadius:12,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`2px solid ${C.neon}50`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>🎮</div>
+        <div>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:15,color:C.text,fontWeight:700}}>LEVEL UP ADMIN</div>
+          <div style={{display:"flex",alignItems:"center",gap:5,marginTop:2}}>
+            <div style={{width:7,height:7,borderRadius:"50%",background:C.neon,boxShadow:`0 0 6px ${C.neon}`}} className="blink"/>
+            <span style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.neon}}>онлайн · обычно отвечает быстро</span>
+          </div>
+        </div>
+      </div>
+      <ChatUIBody msgs={msgs} onSend={onSend} isAdmin={isAdmin} typing={typing} quickReplies={quickReplies}/>
     </div>
   );
 }
@@ -876,6 +934,379 @@ function ProfileScreen({user,balance,activeSession,timeLeft}){
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ADMIN MENU EDITOR — add/edit/delete items & categories with emoji
+// ─────────────────────────────────────────────────────────────────────────────
+const EMOJI_PICKER=["🍔","🌭","🍕","🍟","🍗","🥤","☕","⚡","🔥","💧","🧃","🍫","🥔","🍬","🧄","🍪","🍩","🌮","🥪","🍜","🍝","🥗","🧀","🍳","🥓","🍺","🥨","🍤","🧁","🍰"];
+
+function AdminMenuEditor({menuCats,onMenuChange}){
+  const [editItem,setEditItem]=useState(null); // {ci, ii}
+  const [addingTo,setAddingTo]=useState(null);  // category index
+  const [showAddCat,setShowAddCat]=useState(false);
+  const [draft,setDraft]=useState({name:"",price:"",emoji:"🍔",desc:""});
+  const [catDraft,setCatDraft]=useState({label:"",emoji:"🍔"});
+
+  const genId=()=>"i"+Date.now()+Math.floor(Math.random()*1000);
+
+  const updateItem=(ci,ii,patch)=>{
+    onMenuChange(menuCats.map((c,i)=>i!==ci?c:{...c,items:c.items.map((it,j)=>j!==ii?it:{...it,...patch})}));
+  };
+  const deleteItem=(ci,ii)=>{
+    onMenuChange(menuCats.map((c,i)=>i!==ci?c:{...c,items:c.items.filter((_,j)=>j!==ii)}));
+    setEditItem(null);
+  };
+  const addItem=(ci)=>{
+    if(!draft.name||!draft.price)return;
+    const item={id:genId(),name:draft.name,price:parseInt(draft.price),emoji:draft.emoji,desc:draft.desc};
+    onMenuChange(menuCats.map((c,i)=>i!==ci?c:{...c,items:[...c.items,item]}));
+    setAddingTo(null);setDraft({name:"",price:"",emoji:"🍔",desc:""});
+  };
+  const addCat=()=>{
+    if(!catDraft.label)return;
+    onMenuChange([...menuCats,{id:"c"+Date.now(),label:catDraft.emoji+" "+catDraft.label.toUpperCase(),items:[]}]);
+    setShowAddCat(false);setCatDraft({label:"",emoji:"🍔"});
+  };
+  const deleteCat=(ci)=>{
+    if(window.confirm("Удалить категорию со всеми позициями?"))onMenuChange(menuCats.filter((_,i)=>i!==ci));
+  };
+
+  const inp={width:"100%",background:"rgba(57,255,20,0.05)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"9px 11px",color:C.text,fontSize:13,fontFamily:"'Inter',sans-serif",outline:"none",colorScheme:"dark",marginBottom:8};
+
+  const EmojiGrid=({value,onPick})=>(
+    <div style={{display:"flex",gap:5,overflowX:"auto",padding:"6px 0",marginBottom:8}}>
+      {EMOJI_PICKER.map(e=>(
+        <button key={e} onClick={()=>onPick(e)} style={{flexShrink:0,width:34,height:34,borderRadius:8,border:`1px solid ${value===e?C.neon:C.neonBorder}`,background:value===e?"rgba(57,255,20,0.15)":C.card,fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{e}</button>
+      ))}
+    </div>
+  );
+
+  return(
+    <div style={{overflowY:"auto",flex:1,padding:"0 18px"}}>
+      <SectionHead label="РЕДАКТОР МЕНЮ" color={C.cyan}/>
+      {menuCats.map((cat,ci)=>(
+        <div key={cat.id} style={{marginBottom:18}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <span style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.cyan,letterSpacing:"0.1em"}}>{cat.label}</span>
+            <button onClick={()=>deleteCat(ci)} style={{background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>🗑</button>
+          </div>
+          {cat.items.map((item,ii)=>(
+            <div key={item.id} style={{marginBottom:8}}>
+              {editItem&&editItem.ci===ci&&editItem.ii===ii?(
+                <div style={{background:C.card,border:`1px solid ${C.neon}50`,borderRadius:10,padding:12}}>
+                  <EmojiGrid value={item.emoji} onPick={e=>updateItem(ci,ii,{emoji:e})}/>
+                  <input value={item.name} onChange={e=>updateItem(ci,ii,{name:e.target.value})} placeholder="Название" style={inp}/>
+                  <input value={item.desc||""} onChange={e=>updateItem(ci,ii,{desc:e.target.value})} placeholder="Описание (330мл, с соусом...)" style={inp}/>
+                  <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+                    <input type="number" value={item.price} onChange={e=>updateItem(ci,ii,{price:parseInt(e.target.value)||0})} placeholder="Цена" style={{...inp,marginBottom:0,width:100}}/>
+                    <span style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted}}>руб</span>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setEditItem(null)} style={{flex:1,background:"rgba(57,255,20,0.1)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"8px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>ГОТОВО</button>
+                    <button onClick={()=>deleteItem(ci,ii)} style={{background:"rgba(255,45,45,0.1)",border:"1px solid rgba(255,45,45,0.3)",borderRadius:8,padding:"8px 14px",color:C.red,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>УДАЛИТЬ</button>
+                  </div>
+                </div>
+              ):(
+                <div onClick={()=>setEditItem({ci,ii})} style={{display:"flex",alignItems:"center",gap:10,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"10px 12px",cursor:"pointer"}}>
+                  <span style={{fontSize:20,flexShrink:0}}>{item.emoji}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.text,fontWeight:600}}>{item.name}</div>
+                    {item.desc&&<div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{item.desc}</div>}
+                  </div>
+                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon}}>{item.price} р</span>
+                  <span style={{color:C.muted,fontSize:12}}>✎</span>
+                </div>
+              )}
+            </div>
+          ))}
+          {addingTo===ci?(
+            <div style={{background:C.card,border:`1px solid ${C.neon}40`,borderRadius:10,padding:12,marginTop:4}}>
+              <EmojiGrid value={draft.emoji} onPick={e=>setDraft(d=>({...d,emoji:e}))}/>
+              <input value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} placeholder="Название позиции" style={inp}/>
+              <input value={draft.desc} onChange={e=>setDraft(d=>({...d,desc:e.target.value}))} placeholder="Описание (необязательно)" style={inp}/>
+              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+                <input type="number" value={draft.price} onChange={e=>setDraft(d=>({...d,price:e.target.value}))} placeholder="Цена" style={{...inp,marginBottom:0,width:100}}/>
+                <span style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted}}>руб</span>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>addItem(ci)} style={{flex:1,background:`linear-gradient(90deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}60`,borderRadius:8,padding:"9px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>ДОБАВИТЬ</button>
+                <button onClick={()=>setAddingTo(null)} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"9px 14px",color:C.muted,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>ОТМЕНА</button>
+              </div>
+            </div>
+          ):(
+            <button onClick={()=>{setAddingTo(ci);setDraft({name:"",price:"",emoji:"🍔",desc:""});}} style={{width:"100%",background:"rgba(57,255,20,0.04)",border:`1px dashed ${C.neonBorder}`,borderRadius:8,padding:"8px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:11,marginTop:4}}>+ ПОЗИЦИЯ В «{cat.label}»</button>
+          )}
+        </div>
+      ))}
+
+      {/* Add category */}
+      {showAddCat?(
+        <div style={{background:C.card,border:`1px solid ${C.neon}40`,borderRadius:10,padding:12,marginBottom:8}}>
+          <EmojiGrid value={catDraft.emoji} onPick={e=>setCatDraft(d=>({...d,emoji:e}))}/>
+          <input value={catDraft.label} onChange={e=>setCatDraft(d=>({...d,label:e.target.value}))} placeholder="Название категории (НАПИТКИ...)" style={inp}/>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={addCat} style={{flex:1,background:`linear-gradient(90deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}60`,borderRadius:8,padding:"9px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>СОЗДАТЬ КАТЕГОРИЮ</button>
+            <button onClick={()=>setShowAddCat(false)} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"9px 14px",color:C.muted,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>ОТМЕНА</button>
+          </div>
+        </div>
+      ):(
+        <button onClick={()=>setShowAddCat(true)} style={{width:"100%",background:"rgba(0,229,255,0.06)",border:`1px dashed rgba(0,229,255,0.3)`,borderRadius:10,padding:"11px",color:C.cyan,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12,marginBottom:8}}>+ НОВАЯ КАТЕГОРИЯ</button>
+      )}
+      <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted,textAlign:"center",marginTop:8,lineHeight:1.5}}>
+        ⚠️ Изменения меню сохраняются на время сессии.<br/>Для постоянного сохранения нужна доработка БД.
+      </div>
+      <div style={{height:30}}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN CHAT — pick a player, see their conversation
+// ─────────────────────────────────────────────────────────────────────────────
+function AdminChat({allUsers,onAdminSend,onRead}){
+  const [selectedUserId,setSelectedUserId]=useState(null);
+  const [msgs,setMsgs]=useState([]);
+  const [unreadByUser,setUnreadByUser]=useState({});
+  const pollRef=useRef(null);
+
+  const selectedUser=allUsers.find(u=>u.id===selectedUserId);
+
+  const loadMsgs=useCallback(async()=>{
+    if(!selectedUserId)return;
+    const {data}=await sb.from("messages").select("*").eq("user_id",selectedUserId).order("created_at",{ascending:true}).limit(100);
+    if(data){
+      setMsgs(data.map(m=>({id:m.id,from:m.from_admin?"admin":"user",text:m.text,time:new Date(m.created_at).toLocaleTimeString("ru",{hour:"2-digit",minute:"2-digit"})})));
+    }
+  },[selectedUserId]);
+
+  // Load last message preview + unread for each user
+  const loadPreviews=useCallback(async()=>{
+    const counts={};
+    for(const u of allUsers){
+      const {data}=await sb.from("messages").select("*").eq("user_id",u.id).order("created_at",{ascending:false}).limit(1);
+      if(data&&data[0]&&!data[0].from_admin){
+        counts[u.id]=data[0].text;
+      }
+    }
+    setUnreadByUser(counts);
+  },[allUsers]);
+
+  useEffect(()=>{loadPreviews();},[allUsers,loadPreviews]);
+
+  useEffect(()=>{
+    if(!selectedUserId)return;
+    loadMsgs();
+    onRead&&onRead();
+    pollRef.current=setInterval(loadMsgs,3000);
+    return()=>clearInterval(pollRef.current);
+  },[selectedUserId,loadMsgs,onRead]);
+
+  const handleSend=async(text)=>{
+    await onAdminSend(text,selectedUserId);
+    setMsgs(m=>[...m,{id:Date.now(),from:"admin",text,time:new Date().toLocaleTimeString("ru",{hour:"2-digit",minute:"2-digit"})}]);
+  };
+
+  // User list view
+  if(!selectedUserId){
+    return(
+      <div style={{flex:1,overflowY:"auto",padding:"0 18px"}}>
+        <SectionHead label="ДИАЛОГИ С ИГРОКАМИ" color={C.neon}/>
+        {allUsers.length===0&&<div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.muted}}>Нет игроков</div>}
+        {allUsers.map(u=>(
+          <button key={u.id} onClick={()=>setSelectedUserId(u.id)} style={{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,marginBottom:8,background:C.card,border:`1px solid ${unreadByUser[u.id]?C.neonBorder:"rgba(57,255,20,0.1)"}`,borderRadius:12,padding:"12px 14px",cursor:"pointer"}}>
+            <div style={{width:40,height:40,borderRadius:12,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`1px solid ${C.neon}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>👾</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,fontWeight:600}}>{u.display_name||u.first_name}{u.username?" · @"+u.username:""}</div>
+              <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:unreadByUser[u.id]?C.neon:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{unreadByUser[u.id]||"Нажми чтобы открыть диалог"}</div>
+            </div>
+            {unreadByUser[u.id]&&<div style={{width:9,height:9,borderRadius:"50%",background:C.neon,boxShadow:`0 0 6px ${C.neon}`,flexShrink:0}}/>}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  // Conversation view
+  return(
+    <div style={{display:"flex",flexDirection:"column",flex:1,minHeight:0}}>
+      <div style={{padding:"10px 18px",borderBottom:`1px solid ${C.neonBorder}`,display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <button onClick={()=>setSelectedUserId(null)} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"6px 12px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>←</button>
+        <div style={{width:34,height:34,borderRadius:10,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`1px solid ${C.neon}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>👾</div>
+        <div>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,fontWeight:700}}>{selectedUser?.display_name||selectedUser?.first_name}</div>
+          <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{selectedUser?.username?"@"+selectedUser.username:"ID "+selectedUser?.id}</div>
+        </div>
+      </div>
+      <ChatUIBody msgs={msgs} onSend={handleSend} isAdmin={true} quickReplies={["Уже несу! 🛵","Окей, минуту 👍","Уточни ПК?","Готово ✅"]}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN COMPUTER EDITOR
+// ─────────────────────────────────────────────────────────────────────────────
+function AdminComputerEditor({computers,zones,bookings,onRefresh}){
+  const [editPc,setEditPc]=useState(null);
+  const [editZone,setEditZone]=useState(null);
+  const [showAddPc,setShowAddPc]=useState(false);
+  const [showAddZone,setShowAddZone]=useState(false);
+  const [newPcNum,setNewPcNum]=useState("");
+  const [newPcZone,setNewPcZone]=useState("");
+  const [newPcSpec,setNewPcSpec]=useState("");
+  const [newZoneName,setNewZoneName]=useState("");
+  const [newZoneColor,setNewZoneColor]=useState("#39FF14");
+  const [saving,setSaving]=useState(false);
+
+  const now=new Date();
+  const getStatus=(pc)=>{
+    const active=(bookings||[]).find(b=>b.computer_id===pc.id&&new Date(b.starts_at)<=now&&new Date(b.ends_at)>now&&b.status!=="cancelled");
+    const upcoming=(bookings||[]).find(b=>b.computer_id===pc.id&&new Date(b.starts_at)>now&&b.status!=="cancelled");
+    return pc.status==="off"?"off":active?"busy":upcoming?"reserved":"available";
+  };
+
+  const save=async(table,id,data)=>{
+    setSaving(true);
+    await sb.from(table).update(data).eq("id",id);
+    await onRefresh();
+    setSaving(false);
+  };
+  const del=async(table,id)=>{
+    setSaving(true);
+    await sb.from(table).delete().eq("id",id);
+    await onRefresh();
+    setSaving(false);
+  };
+  const addPc=async()=>{
+    if(!newPcNum||!newPcZone)return;
+    setSaving(true);
+    await sb.from("computers").insert({number:parseInt(newPcNum),zone_id:newPcZone,spec:newPcSpec,status:"available",sort_order:parseInt(newPcNum)});
+    setShowAddPc(false);setNewPcNum("");setNewPcSpec("");
+    await onRefresh();setSaving(false);
+  };
+  const addZone=async()=>{
+    if(!newZoneName)return;
+    setSaving(true);
+    await sb.from("zones").insert({name:newZoneName,color:newZoneColor,sort_order:99});
+    setShowAddZone(false);setNewZoneName("");
+    await onRefresh();setSaving(false);
+  };
+
+  const inp={width:"100%",background:"rgba(57,255,20,0.05)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"8px 10px",color:C.text,fontSize:13,fontFamily:"'Inter',sans-serif",outline:"none",colorScheme:"dark",marginBottom:8};
+
+  return(
+    <div style={{overflowY:"auto",flex:1,padding:"0 18px"}}>
+      {/* ZONES */}
+      <SectionHead label="ЗОНЫ" color={C.cyan}/>
+      {(zones||[]).map(z=>(
+        <div key={z.id} style={{background:C.card,border:`1px solid ${z.color}30`,borderRadius:12,padding:"12px 14px",marginBottom:8}}>
+          {editZone===z.id?(
+            <div>
+              <input value={z.name} onChange={async e=>await save("zones",z.id,{name:e.target.value})} style={inp} placeholder="Название зоны"/>
+              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+                <span style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted}}>Цвет:</span>
+                {["#39FF14","#FFD600","#B026FF","#00E5FF","#FF2D2D","#94a3b8"].map(col=>(
+                  <div key={col} onClick={async()=>await save("zones",z.id,{color:col})} style={{width:22,height:22,borderRadius:"50%",background:col,cursor:"pointer",border:z.color===col?"2px solid #fff":"2px solid transparent"}}/>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>setEditZone(null)} style={{flex:1,background:"rgba(57,255,20,0.1)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"8px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>ГОТОВО</button>
+                <button onClick={async()=>{if(window.confirm("Удалить зону?"))await del("zones",z.id);setEditZone(null);}} style={{background:"rgba(255,45,45,0.1)",border:"1px solid rgba(255,45,45,0.3)",borderRadius:8,padding:"8px 14px",color:C.red,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>✕</button>
+              </div>
+            </div>
+          ):(
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setEditZone(z.id)}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:10,height:10,borderRadius:"50%",background:z.color}}/>
+                <span style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text}}>{z.name}</span>
+                <span style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{(computers||[]).filter(c=>c.zone_id===z.id).length} ПК</span>
+              </div>
+              <span style={{color:C.muted,fontSize:14}}>✎</span>
+            </div>
+          )}
+        </div>
+      ))}
+      {showAddZone?(
+        <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:14,marginBottom:8}}>
+          <input value={newZoneName} onChange={e=>setNewZoneName(e.target.value)} placeholder="Название (напр. PLAYSTATION)" style={inp}/>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+            {["#39FF14","#FFD600","#B026FF","#00E5FF","#FF2D2D","#94a3b8"].map(col=>(
+              <div key={col} onClick={()=>setNewZoneColor(col)} style={{width:22,height:22,borderRadius:"50%",background:col,cursor:"pointer",border:newZoneColor===col?"2px solid #fff":"2px solid transparent"}}/>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={addZone} disabled={saving} style={{flex:1,background:`linear-gradient(90deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}60`,borderRadius:8,padding:"9px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13}}>ДОБАВИТЬ</button>
+            <button onClick={()=>setShowAddZone(false)} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"9px 14px",color:C.muted,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13}}>ОТМЕНА</button>
+          </div>
+        </div>
+      ):(
+        <button onClick={()=>setShowAddZone(true)} style={{width:"100%",background:"rgba(57,255,20,0.05)",border:`1px dashed ${C.neonBorder}`,borderRadius:10,padding:"10px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12,marginBottom:8}}>+ ДОБАВИТЬ ЗОНУ</button>
+      )}
+
+      {/* COMPUTERS */}
+      <SectionHead label="КОМПЬЮТЕРЫ" color={C.neon}/>
+      {(zones||[]).map(z=>{
+        const pcs=(computers||[]).filter(c=>c.zone_id===z.id).sort((a,b)=>a.number-b.number);
+        if(!pcs.length)return null;
+        return(
+          <div key={z.id} style={{marginBottom:16}}>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:z.color,letterSpacing:"0.15em",marginBottom:8}}>● {z.name}</div>
+            {pcs.map(pc=>{
+              const liveStatus=getStatus(pc);
+              const s=ST[liveStatus]||ST.available;
+              return(
+                <div key={pc.id} style={{background:C.card,border:`1px solid ${s.color}25`,borderRadius:10,padding:"10px 12px",marginBottom:6}}>
+                  {editPc===pc.id?(
+                    <div>
+                      <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon,minWidth:40}}>#{pc.number}</span>
+                        <select value={pc.status} onChange={async e=>await save("computers",pc.id,{status:e.target.value})} style={{flex:1,...inp,marginBottom:0}}>
+                          <option value="available">Свободно</option>
+                          <option value="off">Выключен</option>
+                        </select>
+                      </div>
+                      <input defaultValue={pc.spec||""} onBlur={async e=>await save("computers",pc.id,{spec:e.target.value})} placeholder="Начинка: RTX 4090..." style={inp}/>
+                      <div style={{display:"flex",gap:8}}>
+                        <button onClick={()=>setEditPc(null)} style={{flex:1,background:"rgba(57,255,20,0.1)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"7px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>ГОТОВО</button>
+                        <button onClick={async()=>{if(window.confirm(`Удалить ПК #${pc.number}?`))await del("computers",pc.id);setEditPc(null);}} style={{background:"rgba(255,45,45,0.1)",border:"1px solid rgba(255,45,45,0.3)",borderRadius:8,padding:"7px 12px",color:C.red,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12}}>✕</button>
+                      </div>
+                    </div>
+                  ):(
+                    <div style={{display:"flex",alignItems:"center",gap:10}} onClick={()=>setEditPc(pc.id)}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:s.color,flexShrink:0}}/>
+                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.text,minWidth:36}}>#{pc.number}</span>
+                      <span style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pc.spec||"—"}</span>
+                      <span style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:s.color}}>{s.label}</span>
+                      <span style={{color:C.muted,fontSize:12,flexShrink:0}}>✎</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      {showAddPc?(
+        <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:14,marginBottom:8}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <input type="number" value={newPcNum} onChange={e=>setNewPcNum(e.target.value)} placeholder="Номер ПК" style={{...inp,marginBottom:0}}/>
+            <select value={newPcZone} onChange={e=>setNewPcZone(e.target.value)} style={{...inp,marginBottom:0,appearance:"none"}}>
+              <option value="">Зона...</option>
+              {(zones||[]).map(z=><option key={z.id} value={z.id}>{z.name}</option>)}
+            </select>
+          </div>
+          <input value={newPcSpec} onChange={e=>setNewPcSpec(e.target.value)} placeholder="Начинка (необязательно)" style={inp}/>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={addPc} disabled={saving} style={{flex:1,background:`linear-gradient(90deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}60`,borderRadius:8,padding:"9px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13}}>ДОБАВИТЬ ПК</button>
+            <button onClick={()=>setShowAddPc(false)} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"9px 14px",color:C.muted,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13}}>ОТМЕНА</button>
+          </div>
+        </div>
+      ):(
+        <button onClick={()=>setShowAddPc(true)} style={{width:"100%",background:"rgba(57,255,20,0.05)",border:`1px dashed ${C.neonBorder}`,borderRadius:10,padding:"10px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12,marginBottom:8}}>+ ДОБАВИТЬ КОМПЬЮТЕР</button>
+      )}
+      <div style={{height:30}}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ADMIN PIN GATE
 // ─────────────────────────────────────────────────────────────────────────────
 const ADMIN_PIN="1337";
@@ -934,7 +1365,7 @@ function AdminPinGate({onSuccess,onCancel}){
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN PANEL
 // ─────────────────────────────────────────────────────────────────────────────
-function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminSend,allUsers=[],adminUnread,onAdminChatOpen,menuCats,onMenuChange,balance}){
+function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminSend,allUsers=[],adminUnread,onAdminChatOpen,menuCats,onMenuChange,balance,adminComputers,adminZones,adminBookings,onRefreshComputers}){
   const [tab,setTab]=useState("orders");
   const [topupAmt,setTopupAmt]=useState("200");
 
@@ -973,13 +1404,7 @@ function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminS
 
       <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,overflow:"hidden"}}>
         {tab==="chat"&&(
-          <ChatUI
-            msgs={chatMsgs}
-            onSend={(text)=>onAdminSend(text, selectedUser?.id)}
-            isAdmin={true}
-            typing={false}
-            quickReplies={["Уже несу! 🛵","Окей, минуту 👍","Уточни ПК?","Готово ✅"]}
-          />
+          <AdminChat allUsers={allUsers} onAdminSend={onAdminSend} onRead={onAdminChatOpen}/>
         )}
         <div style={{display:tab==="chat"?"none":"flex",flexDirection:"column",flex:1,overflowY:"auto",padding:"0 18px"}}>
         {/* ORDERS TAB */}
@@ -1067,56 +1492,12 @@ function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminS
 
         {/* MENU EDITOR TAB */}
         {tab==="menu"&&(
-          <>
-            <SectionHead label="РЕДАКТОР МЕНЮ" color={C.cyan}/>
-            {menuCats.map((cat,ci)=>(
-              <div key={cat.id} style={{marginBottom:16}}>
-                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>{cat.label}</div>
-                {cat.items.map((item,ii)=>(
-                  <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"10px 12px"}}>
-                    <span style={{fontSize:18,flexShrink:0}}>{item.emoji}</span>
-                    <div style={{flex:1,fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.text}}>{item.name}</div>
-                    <div style={{display:"flex",alignItems:"center",gap:6}}>
-                      <input
-                        type="number"
-                        value={item.price}
-                        onChange={e=>{
-                          const newPrice=parseInt(e.target.value)||0;
-                          const updated=menuCats.map((c2,c2i)=>c2i!==ci?c2:{...c2,items:c2.items.map((it,iti)=>iti!==ii?it:{...it,price:newPrice})});
-                          onMenuChange(updated);
-                        }}
-                        style={{width:72,background:"rgba(57,255,20,0.07)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"6px 8px",color:C.neon,fontFamily:"'Bebas Neue',sans-serif",fontSize:18,outline:"none",textAlign:"right",colorScheme:"dark"}}
-                      />
-                      <span style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted}}>РУБ</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </>
+          <AdminMenuEditor menuCats={menuCats} onMenuChange={onMenuChange}/>
         )}
 
-        {/* PCS TAB */}
+        {/* PCS TAB — full editor */}
         {tab==="pcs"&&(
-          <>
-            <SectionHead label="СТАТУС КОМПЬЮТЕРОВ" color={C.cyan}/>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
-              {COMPUTERS.map(pc=>{
-                const s=ST[pc.status];
-                return(
-                  <div key={pc.id} style={{background:C.card,border:`1px solid ${s.color}30`,borderRadius:12,padding:"12px 14px"}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.text}}>ПК #{pc.id}</span>
-                      <div style={{width:8,height:8,borderRadius:"50%",background:s.color,boxShadow:`0 0 5px ${s.color}`}}/>
-                    </div>
-                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:s.color,letterSpacing:"0.1em",marginBottom:4}}>{s.label}</div>
-                    <div style={{fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted}}>{pc.zone}</div>
-                    {pc.timeLeft&&<div style={{fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted,marginTop:2}}>{pc.game} · {pc.timeLeft}мин</div>}
-                  </div>
-                );
-              })}
-            </div>
-          </>
+          <AdminComputerEditor computers={adminComputers} zones={adminZones} bookings={adminBookings} onRefresh={onRefreshComputers}/>
         )}
         <div style={{height:30}}/>
         </div>{/* end scrollable tab content */}
@@ -1216,138 +1597,157 @@ export default function App(){
   const [logoTimer,setLogoTimer]=useState(null);
   const [menuCats,setMenuCats]=useState(MENU_CATS_DEFAULT);
 
-  // ── USER ──────────────────────────────────────────────────────────────────
-  const [user,setUser]=useState(null);        // {id, first_name, username, display_name, balance, admin_note}
+  const [user,setUser]=useState(null);
   const [loading,setLoading]=useState(true);
 
-  // ── CHAT ─────────────────────────────────────────────────────────────────
   const [chatMsgs,setChatMsgs]=useState([]);
   const [chatUnread,setChatUnread]=useState(0);
   const [adminUnread,setAdminUnread]=useState(0);
   const chatPollRef=useRef(null);
 
-  // ── ORDERS ────────────────────────────────────────────────────────────────
   const [orders,setOrders]=useState([]);
 
-  // ── SESSION TIMER ─────────────────────────────────────────────────────────
-  const [activeSession,setActiveSession]=useState(null); // {pc_number, ends_at, duration_hours, started_at}
-  const [timeLeft,setTimeLeft]=useState(null);           // seconds remaining
+  // Computers / zones / bookings (shared between map, book, admin)
+  const [computers,setComputers]=useState([]);
+  const [zones,setZones]=useState([]);
+  const [bookings,setBookings]=useState([]);
+
+  const [activeSession,setActiveSession]=useState(null);
+  const [timeLeft,setTimeLeft]=useState(null);
   const timerRef=useRef(null);
 
-  const nowStr=()=>{const d=new Date();return`${d.getHours().toString().padStart(2,"0")}:${d.getMinutes().toString().padStart(2,"0")}`;};
+  // ── LOAD COMPUTERS / ZONES / BOOKINGS ─────────────────────────────────────
+  const loadInfra=useCallback(async()=>{
+    const [{data:z},{data:c},{data:b}]=await Promise.all([
+      sb.from("zones").select("*").order("sort_order",{ascending:true}),
+      sb.from("computers").select("*").order("number",{ascending:true}),
+      sb.from("bookings").select("*"),
+    ]);
+    if(z)setZones(z);
+    if(c)setComputers(c);
+    if(b)setBookings(b.filter(x=>x.status!=="cancelled"&&x.status!=="done"));
+  },[]);
 
-  // ── INIT: register/load user from Supabase ────────────────────────────────
+  useEffect(()=>{
+    loadInfra();
+    const t=setInterval(loadInfra,8000);
+    return()=>clearInterval(t);
+  },[loadInfra]);
+
+  // ── INIT USER ─────────────────────────────────────────────────────────────
   useEffect(()=>{
     const init=async()=>{
       const tg=getTgUser();
-      // Try to find existing user
       const {data:existing}=await sb.from("users").select("*").eq("id",tg.id).single();
       if(existing&&!existing.error){
+        // Update name/username in case it changed in TG
+        if(existing.first_name!==tg.first_name||existing.username!==tg.username){
+          await sb.from("users").update({first_name:tg.first_name,username:tg.username}).eq("id",tg.id);
+        }
         setUser(existing);
       } else {
-        // Create new user
         const newUser={id:tg.id,first_name:tg.first_name,username:tg.username,display_name:tg.first_name,balance:0,admin_note:""};
-        const {data:created}=await sb.from("users").insert(newUser);
-        setUser(created?.[0]||newUser);
+        await sb.from("users").insert(newUser);
+        setUser(newUser);
       }
       setLoading(false);
     };
     init();
   },[]);
 
-  // ── LOAD ACTIVE SESSION ───────────────────────────────────────────────────
+  // ── DERIVE ACTIVE SESSION FROM BOOKINGS ───────────────────────────────────
   useEffect(()=>{
     if(!user)return;
-    const loadSession=async()=>{
-      const {data}=await sb.from("sessions").select("*").eq("user_id",user.id).eq("active",true).single();
-      if(data&&!data.error){
-        setActiveSession(data);
-        // Check if still valid
-        const endsAt=new Date(data.ends_at);
-        if(endsAt<=new Date()){
-          // Session expired — mark inactive
-          await sb.from("sessions").update({active:false}).eq("id",data.id);
-          setActiveSession(null);
-        }
-      }
-    };
-    loadSession();
-  },[user]);
+    const now=new Date();
+    const myActive=bookings.find(b=>
+      b.user_id===user.id&&
+      new Date(b.starts_at)<=now&&new Date(b.ends_at)>now
+    );
+    if(myActive){
+      setActiveSession({pc_number:myActive.pc_number,ends_at:myActive.ends_at,duration_hours:myActive.duration_hours,started_at:myActive.starts_at});
+    } else {
+      setActiveSession(null);
+    }
+  },[user,bookings]);
 
-  // ── SESSION COUNTDOWN TIMER ───────────────────────────────────────────────
+  // ── SESSION COUNTDOWN ─────────────────────────────────────────────────────
   useEffect(()=>{
     if(timerRef.current)clearInterval(timerRef.current);
-    if(!activeSession)return;
+    if(!activeSession){setTimeLeft(null);return;}
     const tick=()=>{
       const remaining=Math.max(0,Math.floor((new Date(activeSession.ends_at)-new Date())/1000));
       setTimeLeft(remaining);
-      if(remaining===0){
-        clearInterval(timerRef.current);
-        setActiveSession(null);
-      }
+      if(remaining===0){clearInterval(timerRef.current);setActiveSession(null);loadInfra();}
     };
     tick();
     timerRef.current=setInterval(tick,1000);
     return()=>clearInterval(timerRef.current);
-  },[activeSession]);
+  },[activeSession,loadInfra]);
 
-  // ── LOAD CHAT ─────────────────────────────────────────────────────────────
+  // ── LOAD CHAT (user side) ─────────────────────────────────────────────────
   const loadChat=useCallback(async()=>{
     if(!user)return;
     const {data}=await sb.from("messages").select("*").eq("user_id",user.id).order("created_at",{ascending:true}).limit(100);
     if(data){
-      const msgs=data.map(m=>({
-        id:m.id,from:m.from_admin?"admin":"user",
-        text:m.text,
-        time:new Date(m.created_at).toLocaleTimeString("ru",{hour:"2-digit",minute:"2-digit"}),
-      }));
-      setChatMsgs(msgs);
+      setChatMsgs(data.map(m=>({id:m.id,from:m.from_admin?"admin":"user",text:m.text,time:new Date(m.created_at).toLocaleTimeString("ru",{hour:"2-digit",minute:"2-digit"})})));
     }
   },[user]);
 
   useEffect(()=>{
-    if(!user)return;
+    if(!user||showAdmin)return;
     loadChat();
-    // Poll for new messages every 3s
     chatPollRef.current=setInterval(loadChat,3000);
     return()=>clearInterval(chatPollRef.current);
-  },[user,loadChat]);
+  },[user,loadChat,showAdmin]);
 
-  // ── LOAD ORDERS (for admin) ───────────────────────────────────────────────
+  // ── ADMIN: load orders, all users ─────────────────────────────────────────
   const loadOrders=async()=>{
     const {data}=await sb.from("orders").select("*").eq("status","pending").order("created_at",{ascending:false});
     if(data)setOrders(data.map(o=>({...o,pc:o.pc_number,payMethod:o.pay_method,time:new Date(o.created_at).toLocaleTimeString("ru",{hour:"2-digit",minute:"2-digit"})})));
   };
-
-  useEffect(()=>{
-    if(!showAdmin)return;
-    loadOrders();
-    const t=setInterval(loadOrders,5000);
-    return()=>clearInterval(t);
-  },[showAdmin]);
-
-  // ── LOAD ALL USERS FOR ADMIN ──────────────────────────────────────────────
   const [allUsers,setAllUsers]=useState([]);
+  const loadAllUsers=async()=>{
+    const {data}=await sb.from("users").select("*").order("created_at",{ascending:false});
+    if(data)setAllUsers(data);
+  };
   useEffect(()=>{
     if(!showAdmin)return;
-    sb.from("users").select("*").order("created_at",{ascending:false}).then(({data})=>{if(data)setAllUsers(data);});
-  },[showAdmin]);
+    loadOrders();loadAllUsers();loadInfra();
+    const t=setInterval(()=>{loadOrders();loadAllUsers();loadInfra();},5000);
+    return()=>clearInterval(t);
+  },[showAdmin,loadInfra]);
+
+  // ── 30-MIN BOOKING REMINDER CHECK ─────────────────────────────────────────
+  useEffect(()=>{
+    const checkReminders=async()=>{
+      const now=new Date();
+      for(const b of bookings){
+        if(b.notified_30min)continue;
+        const starts=new Date(b.starts_at);
+        const minsUntil=(starts-now)/60000;
+        if(minsUntil>0&&minsUntil<=30){
+          await sb.from("bookings").update({notified_30min:true}).eq("id",b.id);
+          sendBotMessage(b.user_id,`🔔 <b>Напоминание!</b>\n\nЧерез ${Math.round(minsUntil)} мин у тебя бронь ПК #${b.pc_number}\nНе опаздывай! 👾`);
+        }
+      }
+    };
+    const t=setInterval(checkReminders,60000);
+    return()=>clearInterval(t);
+  },[bookings]);
 
   // ── HANDLERS ─────────────────────────────────────────────────────────────
   const handleUserSend=async(text)=>{
     if(!user)return;
-    const msg={user_id:user.id,from_admin:false,text};
-    await sb.from("messages").insert(msg);
+    await sb.from("messages").insert({user_id:user.id,from_admin:false,text});
     setAdminUnread(u=>u+1);
     loadChat();
   };
 
   const handleAdminSend=async(text,targetUserId)=>{
-    const uid=targetUserId||allUsers[0]?.id||user?.id;
-    if(!uid)return;
-    await sb.from("messages").insert({user_id:uid,from_admin:true,text});
-    setChatUnread(u=>u+1);
-    loadChat();
+    if(!targetUserId)return;
+    await sb.from("messages").insert({user_id:targetUserId,from_admin:true,text});
+    // Notify user in their TG private chat
+    sendBotMessage(targetUserId,`💬 <b>Сообщение от администратора:</b>\n\n${text}`);
   };
 
   const handleBalanceChange=async(delta)=>{
@@ -1379,14 +1779,25 @@ export default function App(){
     await sb.from("topups").insert({user_id:targetUserId,amount,note:"Пополнение от админа"});
     setAllUsers(us=>us.map(u=>u.id===targetUserId?{...u,balance:newBal}:u));
     if(user&&user.id===targetUserId)setUser(u=>({...u,balance:newBal}));
+    // Notify user
+    sendBotMessage(targetUserId,`💳 <b>Баланс пополнен!</b>\n\n+${amount} руб\nТекущий баланс: ${newBal} руб 🎮`);
   };
 
-  const handleBookSession=async(pcId,durationHours)=>{
+  // Called by BookScreen when booking starts now → notify + refresh
+  const handleBookSession=async(pcNumber,durationHours,starts,ends)=>{
     if(!user)return;
-    const startedAt=new Date();
-    const endsAt=new Date(startedAt.getTime()+durationHours*3600*1000);
-    const {data}=await sb.from("sessions").insert({user_id:user.id,pc_number:pcId,started_at:startedAt.toISOString(),duration_hours:durationHours,ends_at:endsAt.toISOString(),active:true});
-    if(data?.[0])setActiveSession(data[0]);
+    await loadInfra();
+    // Send confirmation to TG
+    const startStr=new Date(starts).toLocaleString("ru",{day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"});
+    sendBotMessage(user.id,`✅ <b>Бронь подтверждена!</b>\n\nПК #${pcNumber}\n🕐 ${startStr}\n⏱ ${durationHours} ч.\n\nЖдём тебя! 👾`);
+  };
+
+  // Generic booking confirmation (also for future bookings)
+  const notifyBookingCreated=async(pcNumber,durationHours,starts)=>{
+    if(!user)return;
+    const startStr=new Date(starts).toLocaleString("ru",{day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"});
+    sendBotMessage(user.id,`✅ <b>Бронь подтверждена!</b>\n\nПК #${pcNumber}\n🕐 ${startStr}\n⏱ ${durationHours} ч.\n\n🔔 Напомним за 30 мин до старта`);
+    await loadInfra();
   };
 
   const handleLogoTap=()=>{
@@ -1439,9 +1850,9 @@ export default function App(){
             <Logo balance={balance} onBalanceTap={()=>handleTabChange("profile")}/>
           </div>
           <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,position:"relative"}}>
-            {tab==="map"&&<MapScreen onBook={(pc)=>{setBookPC(pc);setTab("book");}}/>}
-            {tab==="book"&&<BookScreen preSelected={bookPC} onSessionBooked={handleBookSession}/>}
-            {tab==="menu"&&<MenuScreen balance={balance} onBalanceChange={handleBalanceChange} onOrderNotify={handleOrderNotify} menuCats={menuCats}/>}
+            {tab==="map"&&<MapScreen onBook={(pc)=>{setBookPC(pc);setTab("book");}} computers={computers} zones={zones} bookings={bookings}/>}
+            {tab==="book"&&<BookScreen preSelected={bookPC} onSessionBooked={handleBookSession} onBookingCreated={notifyBookingCreated} computers={computers} zones={zones} bookings={bookings} user={user}/>}
+            {tab==="menu"&&<MenuScreen balance={balance} onBalanceChange={handleBalanceChange} onOrderNotify={handleOrderNotify} menuCats={menuCats} activeSession={activeSession}/>}
             {tab==="chat"&&<ChatScreen msgs={chatMsgs} onUserSend={handleUserSend} onRead={()=>setChatUnread(0)} adminTyping={false}/>}
             {tab==="profile"&&<ProfileScreen user={user} balance={balance} activeSession={activeSession} timeLeft={timeLeft}/>}
             {tab==="tariffs"&&<TariffsScreen/>}
@@ -1459,18 +1870,20 @@ export default function App(){
         )}
         {showAdmin&&(
           <AdminPanel
-            orders={orders}
             onClose={()=>setShowAdmin(false)}
+            orders={orders}
             onDeliverOrder={handleDeliverOrder}
             onTopupUser={handleTopupUser}
-            chatMsgs={chatMsgs}
             onAdminSend={handleAdminSend}
             allUsers={allUsers}
             adminUnread={adminUnread}
             onAdminChatOpen={()=>setAdminUnread(0)}
             menuCats={menuCats}
             onMenuChange={setMenuCats}
-            balance={balance}
+            adminComputers={computers}
+            adminZones={zones}
+            adminBookings={bookings}
+            onRefreshComputers={loadInfra}
           />
         )}
       </div>
