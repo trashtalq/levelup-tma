@@ -513,6 +513,56 @@ function BookScreen({preSelected,onSessionBooked,onBookingCreated,computers,zone
           </select>
         </div>
       </div>
+
+      {/* Availability timeline for selected PC + date */}
+      {pcId&&(
+        <div style={{marginTop:14}}>
+          <label style={lbl}>ЗАНЯТОСТЬ НА {new Date(date).toLocaleDateString("ru",{day:"numeric",month:"short"})}</label>
+          <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"14px 12px 10px"}}>
+            <div style={{display:"flex",gap:2}}>
+              {Array.from({length:24},(_,h)=>{
+                // Is this hour booked by someone?
+                const hourStart=new Date(`${date}T${String(h).padStart(2,"0")}:00`);
+                const hourEnd=new Date(hourStart.getTime()+3600000);
+                const isBooked=(bookings||[]).some(b=>
+                  b.computer_id===pcId&&b.status!=="cancelled"&&b.status!=="done"&&
+                  new Date(b.starts_at)<hourEnd&&new Date(b.ends_at)>hourStart
+                );
+                // Is this hour part of my current selection?
+                let isMine=false;
+                if(time){
+                  const myStart=new Date(`${date}T${time}`);
+                  const myEnd=new Date(myStart.getTime()+parseInt(hours)*3600000);
+                  isMine=myStart<hourEnd&&myEnd>hourStart;
+                }
+                const isPast=hourEnd<new Date();
+                const color=isBooked?C.red:isMine?C.neon:isPast?"#2a2a2a":"rgba(57,255,20,0.15)";
+                return(
+                  <div key={h} title={`${h}:00`} onClick={()=>{if(!isBooked&&!isPast)setTime(`${String(h).padStart(2,"0")}:00`);}}
+                    style={{flex:1,height:32,borderRadius:3,background:color,cursor:isBooked||isPast?"default":"pointer",
+                      boxShadow:isMine?`0 0 8px ${C.neon}`:isBooked?`0 0 6px ${C.red}80`:"none",
+                      transition:"all 0.15s",position:"relative"}}/>
+                );
+              })}
+            </div>
+            {/* Hour labels every 6h */}
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted}}>
+              <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+            </div>
+            {/* Legend */}
+            <div style={{display:"flex",gap:14,marginTop:10,justifyContent:"center"}}>
+              {[["rgba(57,255,20,0.15)","свободно"],[C.red,"занято"],[C.neon,"твоя бронь"]].map(([col,lbl])=>(
+                <div key={lbl} style={{display:"flex",alignItems:"center",gap:5}}>
+                  <div style={{width:10,height:10,borderRadius:2,background:col,boxShadow:col===C.neon||col===C.red?`0 0 4px ${col}`:"none"}}/>
+                  <span style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{lbl}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted,textAlign:"center",marginTop:8}}>Нажми на свободный час чтобы выбрать время</div>
+          </div>
+        </div>
+      )}
+
       {conflict&&<div style={{marginTop:12,background:"rgba(255,45,45,0.1)",border:"1px solid rgba(255,45,45,0.3)",borderRadius:10,padding:"10px 14px",fontFamily:"'Inter',sans-serif",fontSize:12,color:C.red}}>⚠️ Этот компьютер уже забронирован на выбранное время</div>}
       {ready&&!conflict&&(
         <div className="slide-up" style={{marginTop:16,background:"rgba(57,255,20,0.06)",border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -1630,7 +1680,7 @@ export default function App(){
 
   useEffect(()=>{
     loadInfra();
-    const t=setInterval(loadInfra,8000);
+    const t=setInterval(loadInfra,4000);
     return()=>clearInterval(t);
   },[loadInfra]);
 
