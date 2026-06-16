@@ -1,0 +1,1232 @@
+import { useState, useEffect, useRef } from "react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GLOBAL STYLES
+// ─────────────────────────────────────────────────────────────────────────────
+const GlobalStyle = () => (
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap');
+    * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    body { background:#080d08; overflow:hidden; }
+    select option { background:#0d1a0d; color:#e8ffe8; }
+    ::-webkit-scrollbar { width:3px; }
+    ::-webkit-scrollbar-track { background:transparent; }
+    ::-webkit-scrollbar-thumb { background:rgba(57,255,20,0.3); border-radius:3px; }
+    textarea { resize:none; }
+    @keyframes glitch {
+      0%,92%,100% { clip-path:none; transform:none; }
+      93% { clip-path:inset(20% 0 60% 0); transform:translate(-3px,0); }
+      95% { clip-path:inset(60% 0 10% 0); transform:translate(3px,0); }
+      97% { clip-path:inset(40% 0 30% 0); transform:translate(-2px,0); }
+    }
+    @keyframes flicker {
+      0%,96%,100%{opacity:1} 97%{opacity:0.7} 98%{opacity:1} 99%{opacity:0.85}
+    }
+    @keyframes slideUp {
+      from{transform:translateY(16px);opacity:0} to{transform:translateY(0);opacity:1}
+    }
+    @keyframes pulse {
+      0%,100%{box-shadow:0 0 0 0 rgba(57,255,20,0)}
+      50%{box-shadow:0 0 0 5px rgba(57,255,20,0.12)}
+    }
+    @keyframes blink {
+      0%,100%{opacity:1} 50%{opacity:0}
+    }
+    @keyframes msgIn {
+      from{transform:translateY(8px);opacity:0} to{transform:translateY(0);opacity:1}
+    }
+    .glitch { animation:glitch 7s infinite; }
+    .flicker { animation:flicker 4s infinite; }
+    .slide-up { animation:slideUp 0.25s ease forwards; }
+    .blink { animation:blink 1s infinite; }
+    .msg-in { animation:msgIn 0.2s ease forwards; }
+  `}</style>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PALETTE & CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+const C = {
+  neon:"#39FF14", neonDim:"#2BC10E",
+  neonGlow:"rgba(57,255,20,0.16)", neonBorder:"rgba(57,255,20,0.25)",
+  bg:"#080d08", card:"#0d150d", card2:"#101a10",
+  text:"#E8FFE8", muted:"#6b8f6b",
+  red:"#FF2D2D", yellow:"#FFD600", purple:"#B026FF", cyan:"#00E5FF",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA
+// ─────────────────────────────────────────────────────────────────────────────
+const COMPUTERS = Array.from({length:20},(_,i)=>{
+  const forced={0:"available",3:"available",7:"available",11:"available",15:"available",19:"available",1:"reserved",8:"reserved"};
+  const fallback=["busy","busy","busy","busy","reserved"][i%5];
+  return {
+    id:i+1, zone:i<4?"VIP":i<16?"STANDARD":"BUDGET",
+    spec:i<4?"RTX 4090 · i9-14900K · 32GB · 240Hz":i<16?"RTX 4070 · i7-13700K · 16GB · 165Hz":"RTX 3060 · i5-12600K · 16GB · 144Hz",
+    status:forced[i]??fallback,
+    timeLeft:forced[i]==="available"||forced[i]==="reserved"?null:Math.floor(Math.random()*90)+15,
+    game:["CS2","Dota 2","Valorant","FC 26","Apex"][i%5],
+  };
+});
+
+const TARIFFS=[
+  {name:"УТРО",hours:"06:00–13:00",std:25,vip:35,tag:"ВЫГОДНО"},
+  {name:"ДЕНЬ",hours:"13:00–18:00",std:30,vip:40,tag:null},
+  {name:"ВЕЧЕР",hours:"18:00–00:00",std:35,vip:45,tag:"ПОПУЛЯРНО"},
+  {name:"НОЧЬ",hours:"00:00–06:00",std:25,vip:30,tag:"ДЁШЕВО"},
+];
+
+const EVENTS=[
+  {title:"FC 26 ТУРНИР",date:"22 ИЮНЯ",prize:"БЕСПЛАТНЫЙ",sub:"Старт 10:00",color:C.neon,emoji:"⚽"},
+  {title:"CS2 NIGHT CUP",date:"28 ИЮНЯ",prize:"15 000 ₽",sub:"Старт 20:00",color:C.yellow,emoji:"🔫"},
+  {title:"DOTA 2 КУБОК",date:"5 ИЮЛЯ",prize:"10 000 ₽",sub:"Старт 12:00",color:C.purple,emoji:"🛡️"},
+];
+
+const LEADERS=[
+  {name:"ВЛАД_PRO",hours:312,game:"CS2",rank:1},
+  {name:"СЕРЁГА",hours:289,game:"Dota 2",rank:2},
+  {name:"АРТЁМ",hours:241,game:"Valorant",rank:3},
+  {name:"НИКИТА",hours:198,game:"Apex",rank:4},
+  {name:"МАКС",hours:177,game:"CS2",rank:5},
+];
+
+const MENU_CATS=[
+  {id:"drinks",label:"🥤 НАПИТКИ",items:[
+    {id:"d1",name:"Энергетик Monster",price:120,emoji:"⚡",desc:"330мл"},
+    {id:"d2",name:"Энергетик Burn",price:100,emoji:"🔥",desc:"330мл"},
+    {id:"d3",name:"Кофе Americano",price:80,emoji:"☕",desc:"Двойной"},
+    {id:"d4",name:"Кофе Капучино",price:100,emoji:"☕",desc:"250мл"},
+    {id:"d5",name:"Кола / Пепси",price:70,emoji:"🥤",desc:"0.5л"},
+    {id:"d6",name:"Вода",price:40,emoji:"💧",desc:"0.5л"},
+  ]},
+  {id:"food",label:"🍔 ЕДА",items:[
+    {id:"f1",name:"Бургер Classic",price:250,emoji:"🍔",desc:"Говядина, сыр, соус"},
+    {id:"f2",name:"Хот-дог",price:150,emoji:"🌭",desc:"С горчицей"},
+    {id:"f3",name:"Пицца (кусок)",price:130,emoji:"🍕",desc:"Маргарита / Пепперони"},
+    {id:"f4",name:"Картошка фри",price:90,emoji:"🍟",desc:"Большая порция"},
+    {id:"f5",name:"Наггетсы 6шт",price:120,emoji:"🍗",desc:"С соусом"},
+  ]},
+  {id:"snacks",label:"🍫 СНЕКИ",items:[
+    {id:"s1",name:"Чипсы Lay's",price:90,emoji:"🥔",desc:"Большая пачка"},
+    {id:"s2",name:"Сухарики",price:60,emoji:"🧄",desc:"Пачка"},
+    {id:"s3",name:"Шоколадка",price:80,emoji:"🍫",desc:"Twix / Snickers"},
+    {id:"s4",name:"Жвачка",price:30,emoji:"🍬",desc:"Пачка"},
+  ]},
+];
+
+const ST={
+  available:{color:C.neon,label:"СВОБОДНО",bg:"rgba(57,255,20,0.07)"},
+  busy:{color:C.red,label:"ЗАНЯТО",bg:"rgba(255,45,45,0.07)"},
+  reserved:{color:C.yellow,label:"РЕЗЕРВ",bg:"rgba(255,214,0,0.07)"},
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED UI ATOMS
+// ─────────────────────────────────────────────────────────────────────────────
+function SectionHead({label,color}){
+  const col=color||C.neon;
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:10,margin:"18px 0 12px"}}>
+      <div style={{width:3,height:18,background:col,boxShadow:`0 0 8px ${col}`,borderRadius:2,flexShrink:0}}/>
+      <span style={{fontFamily:"'Oswald',sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.18em",color:col}}>{label}</span>
+      <div style={{flex:1,height:1,background:`linear-gradient(90deg,${col}40,transparent)`}}/>
+    </div>
+  );
+}
+
+function Logo({balance,onBalanceTap}){
+  return(
+    <div style={{
+      padding:"14px 18px 12px",
+      borderBottom:`1px solid ${C.neonBorder}`,
+      display:"flex",alignItems:"center",justifyContent:"space-between",
+      background:"rgba(57,255,20,0.02)",flexShrink:0,
+    }}>
+      <div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,lineHeight:0.95,letterSpacing:"0.04em",color:C.text}} className="glitch">
+          <span style={{color:C.neon}}>LEVEL</span> UP
+        </div>
+        <div style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted,letterSpacing:"0.2em",marginTop:1}}>COMPUTER CLUB · ОРША</div>
+      </div>
+      <button onClick={onBalanceTap} style={{
+        background:"rgba(57,255,20,0.08)",border:`1px solid ${C.neonBorder}`,
+        borderRadius:12,padding:"8px 14px",cursor:"pointer",textAlign:"right",
+      }}>
+        <div style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted,letterSpacing:"0.15em"}}>БАЛАНС</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:C.neon,lineHeight:1,textShadow:`0 0 10px ${C.neonGlow}`}}>
+          {balance} РУБ
+        </div>
+      </button>
+    </div>
+  );
+}
+
+function NeonBtn({onClick,children,color,disabled,style={}}){
+  const col=color||C.neon;
+  return(
+    <button onClick={onClick} disabled={disabled} style={{
+      width:"100%",
+      background:disabled?"rgba(57,255,20,0.04)":`linear-gradient(90deg,rgba(57,255,20,0.12),rgba(57,255,20,0.06))`,
+      border:`1px solid ${disabled?"rgba(57,255,20,0.12)":col+"60"}`,
+      borderRadius:12,padding:"14px",
+      fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
+      color:disabled?C.muted:col,cursor:disabled?"default":"pointer",
+      boxShadow:disabled?"none":`0 0 18px rgba(57,255,20,0.15)`,
+      textShadow:disabled?"none":`0 0 8px ${col}`,
+      transition:"all 0.15s",...style,
+    }}>{children}</button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NAV
+// ─────────────────────────────────────────────────────────────────────────────
+function BottomNav({active,onChange,chatUnread}){
+  const tabs=[
+    {id:"map",icon:"🗺",label:"ЗАЛ"},
+    {id:"book",icon:"⚡",label:"БРОНЬ"},
+    {id:"menu",icon:"🍔",label:"МЕНЮ"},
+    {id:"chat",icon:"💬",label:"ЧАТ"},
+    {id:"profile",icon:"👾",label:"Я"},
+  ];
+  return(
+    <nav style={{
+      position:"absolute",bottom:0,left:0,right:0,zIndex:200,
+      background:"rgba(8,13,8,0.97)",borderTop:`1px solid ${C.neonBorder}`,
+      backdropFilter:"blur(16px)",display:"flex",
+    }}>
+      {tabs.map(t=>{
+        const isActive=active===t.id;
+        const hasBadge=t.id==="chat"&&chatUnread>0;
+        return(
+          <button key={t.id} onClick={()=>onChange(t.id)} style={{
+            flex:1,border:"none",background:"none",padding:"10px 0 8px",
+            display:"flex",flexDirection:"column",alignItems:"center",gap:3,
+            cursor:"pointer",position:"relative",
+          }}>
+            {isActive&&<div style={{position:"absolute",top:0,left:"20%",right:"20%",height:2,background:C.neon,boxShadow:`0 0 8px ${C.neon}`}}/>}
+            <div style={{position:"relative"}}>
+              <span style={{fontSize:18,filter:isActive?`drop-shadow(0 0 5px ${C.neon})`:"grayscale(1) opacity(0.4)"}}>{t.icon}</span>
+              {hasBadge&&<div style={{position:"absolute",top:-4,right:-6,width:16,height:16,borderRadius:"50%",background:C.red,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#fff",fontWeight:700}}>{chatUnread}</div>}
+            </div>
+            <span style={{fontFamily:"'Oswald',sans-serif",fontSize:9,letterSpacing:"0.1em",color:isActive?C.neon:C.muted}}>{t.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAP SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function MapScreen({onBook}){
+  const [sel,setSel]=useState(null);
+  const free=COMPUTERS.filter(c=>c.status==="available").length;
+  const busy=COMPUTERS.filter(c=>c.status==="busy").length;
+  const zones=[{id:"VIP",label:"VIP ЗОНА",color:C.yellow},{id:"STANDARD",label:"STANDARD",color:C.neon},{id:"BUDGET",label:"BUDGET",color:C.muted}];
+  const selPC=COMPUTERS.find(c=>c.id===sel);
+
+  return(
+    <div style={{padding:"0 18px",overflowY:"auto",flex:1}}>
+      <div style={{display:"flex",gap:10,marginTop:16}}>
+        {[{val:free,label:"СВОБОДНО",color:C.neon},{val:busy,label:"ЗАНЯТО",color:C.red}].map(s=>(
+          <div key={s.label} style={{flex:1,background:`${s.color}10`,border:`1px solid ${s.color}30`,borderRadius:12,padding:"14px 16px",position:"relative",overflow:"hidden"}}>
+            <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:s.color,boxShadow:`0 0 8px ${s.color}`}}/>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:s.color,lineHeight:1,textShadow:`0 0 16px ${s.color}60`}}>{s.val}</div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.15em",marginTop:2}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:14,marginTop:12}}>
+        {Object.entries(ST).map(([k,v])=>(
+          <div key={k} style={{display:"flex",alignItems:"center",gap:5}}>
+            <div style={{width:8,height:8,background:v.color,borderRadius:2,boxShadow:`0 0 4px ${v.color}`}}/>
+            <span style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted,letterSpacing:"0.1em"}}>{v.label}</span>
+          </div>
+        ))}
+      </div>
+
+      {zones.map(zone=>{
+        const pcs=COMPUTERS.filter(c=>c.zone===zone.id);
+        return(
+          <div key={zone.id}>
+            <SectionHead label={zone.label} color={zone.color}/>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+              {pcs.map(pc=>{
+                const s=ST[pc.status]; const isS=sel===pc.id;
+                return(
+                  <button key={pc.id} onClick={()=>setSel(isS?null:pc.id)} disabled={pc.status==="busy"}
+                    style={{border:`1.5px solid ${isS?s.color:s.color+"40"}`,borderRadius:10,background:isS?s.bg+"cc":s.bg,
+                      padding:"10px 4px 8px",cursor:pc.status==="busy"?"default":"pointer",
+                      display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all 0.15s",
+                      boxShadow:isS?`0 0 14px ${s.color}50`:"none"}}>
+                    <span style={{fontSize:17}}>🖥</span>
+                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:14,color:s.color,lineHeight:1}}>#{pc.id}</span>
+                    <span style={{fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted}}>{pc.timeLeft?`${pc.timeLeft}м`:"···"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {selPC&&(
+        <div className="slide-up" style={{marginTop:18,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:16,padding:18,position:"relative",overflow:"hidden",boxShadow:`0 0 28px ${C.neonGlow}`}}>
+          <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${C.neon},transparent)`}}/>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+            <div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:C.text,lineHeight:1}}>ПК <span style={{color:C.neon}}>#{selPC.id}</span></div>
+              <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,marginTop:3,letterSpacing:"0.08em"}}>{selPC.zone} ZONE</div>
+            </div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:ST[selPC.status].color,background:ST[selPC.status].bg,border:`1px solid ${ST[selPC.status].color}50`,padding:"4px 12px",borderRadius:20,fontWeight:700,letterSpacing:"0.1em"}}>{ST[selPC.status].label}</div>
+          </div>
+          <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted,marginBottom:14,lineHeight:1.5}}>{selPC.spec}</div>
+          <NeonBtn onClick={()=>onBook(selPC)}>ЗАБРОНИРОВАТЬ →</NeonBtn>
+        </div>
+      )}
+      <div style={{height:90}}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOK SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function BookScreen({preSelected}){
+  const [pc,setPc]=useState(preSelected?.id?.toString()||"");
+  const [date,setDate]=useState("");
+  const [time,setTime]=useState("");
+  const [hours,setHours]=useState("2");
+  const [done,setDone]=useState(false);
+  const [loading,setLoading]=useState(false);
+  const freePCs=COMPUTERS.filter(c=>c.status==="available");
+  const ready=pc&&date&&time;
+  const price=parseInt(hours)*30;
+
+  const inp={width:"100%",background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none",colorScheme:"dark"};
+  const lbl={fontFamily:"'Oswald',sans-serif",fontSize:10,letterSpacing:"0.18em",color:C.muted,display:"block",marginBottom:6};
+
+  if(done) return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,padding:24,textAlign:"center"}}>
+      <div style={{fontSize:64,filter:`drop-shadow(0 0 20px ${C.neon})`,marginBottom:16}}>✅</div>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:34,color:C.neon,letterSpacing:"0.05em",textShadow:`0 0 18px ${C.neonGlow}`,marginBottom:8}}>БРОНЬ ПРИНЯТА!</div>
+      <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.muted,lineHeight:1.8,marginBottom:20}}>
+        ПК #{pc} · {date} · {time}<br/>
+        <span style={{color:C.neon,fontSize:22,fontFamily:"'Bebas Neue',sans-serif"}}>{hours} ЧАС · {price} РУБ</span>
+      </div>
+      <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:14,padding:16,fontSize:12,color:C.muted,lineHeight:1.7,marginBottom:20,fontFamily:"'Inter',sans-serif"}}>
+        Назови имя на стойке или покажи этот экран 👾
+      </div>
+      <button onClick={()=>{setDone(false);setPc("");setDate("");setTime("");}} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"11px 28px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:13,letterSpacing:"0.1em"}}>← НОВАЯ БРОНЬ</button>
+    </div>
+  );
+
+  return(
+    <div style={{padding:"0 18px",overflowY:"auto",flex:1}}>
+      {preSelected&&(
+        <div style={{marginTop:16,background:"rgba(57,255,20,0.07)",border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"12px 16px",display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:22}}>🖥</span>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon}}>ПК #{preSelected.id} ВЫБРАН</div>
+            <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{preSelected.spec}</div>
+          </div>
+        </div>
+      )}
+      <SectionHead label="ВЫБОР КОМПЬЮТЕРА"/>
+      <select value={pc} onChange={e=>setPc(e.target.value)} style={{...inp,appearance:"none",marginBottom:14}}>
+        <option value="">Выбери ПК...</option>
+        {freePCs.map(c=><option key={c.id} value={c.id}>ПК #{c.id} — {c.zone} — {c.spec.split("·")[0].trim()}</option>)}
+      </select>
+      <SectionHead label="ВРЕМЯ СЕССИИ"/>
+      <label style={lbl}>ДАТА</label>
+      <input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{...inp,marginBottom:12}}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div><label style={lbl}>НАЧАЛО</label><input type="time" value={time} onChange={e=>setTime(e.target.value)} style={inp}/></div>
+        <div><label style={lbl}>ЧАСОВ</label>
+          <select value={hours} onChange={e=>setHours(e.target.value)} style={{...inp,appearance:"none"}}>
+            {[1,2,3,4,5,6,8,10,12].map(h=><option key={h} value={h}>{h} ч. · {h*30} руб</option>)}
+          </select>
+        </div>
+      </div>
+      {ready&&(
+        <div className="slide-up" style={{marginTop:16,background:"rgba(57,255,20,0.06)",border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.1em"}}>К ОПЛАТЕ</div>
+            <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted,marginTop:2}}>{hours} ч. × 30 руб/ч</div>
+          </div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:C.neon,textShadow:`0 0 12px ${C.neonGlow}`}}>{price} РУБ</div>
+        </div>
+      )}
+      <div style={{marginTop:16}}>
+        <NeonBtn onClick={()=>{if(!ready||loading)return;setLoading(true);setTimeout(()=>{setLoading(false);setDone(true);},1000);}} disabled={!ready||loading}>
+          {loading?"БРОНИРУЕМ...":"ПОДТВЕРДИТЬ БРОНЬ"}
+        </NeonBtn>
+      </div>
+      <div style={{fontFamily:"'Inter',sans-serif",textAlign:"center",fontSize:11,color:C.muted,marginTop:10}}>Отмена бесплатно за 1 час до начала</div>
+      <div style={{height:90}}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MENU SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function MenuScreen({balance,onBalanceChange,onOrderNotify}){
+  const [cat,setCat]=useState("drinks");
+  const [cart,setCart]=useState({});
+  const [payMethod,setPayMethod]=useState("balance"); // "balance" | "cash"
+  const [orderDone,setOrderDone]=useState(false);
+  const [showCart,setShowCart]=useState(false);
+  const [myPC]=useState(7);
+
+  const addItem=(id)=>setCart(c=>({...c,[id]:(c[id]||0)+1}));
+  const removeItem=(id)=>setCart(c=>{const n={...c};if(n[id]>1)n[id]--;else delete n[id];return n;});
+  const cartCount=Object.values(cart).reduce((a,b)=>a+b,0);
+  const cartTotal=Object.entries(cart).reduce((sum,[id,qty])=>{
+    const item=MENU_CATS.flatMap(c=>c.items).find(i=>i.id===id);
+    return sum+(item?item.price*qty:0);
+  },0);
+
+  const currentCat=MENU_CATS.find(c=>c.id===cat);
+
+  const confirmOrder=()=>{
+    if(payMethod==="balance"&&balance<cartTotal)return;
+    if(payMethod==="balance")onBalanceChange(-cartTotal);
+    setCart({});setShowCart(false);setOrderDone(true);
+    onOrderNotify(myPC,cartTotal,payMethod);
+    setTimeout(()=>setOrderDone(false),4000);
+  };
+
+  if(orderDone) return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,padding:24,textAlign:"center"}}>
+      <div style={{fontSize:64,marginBottom:16,filter:`drop-shadow(0 0 16px ${C.neon})`}}>🛵</div>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:C.neon,letterSpacing:"0.05em",marginBottom:8,textShadow:`0 0 18px ${C.neonGlow}`}}>ЗАКАЗ ПРИНЯТ!</div>
+      <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.muted,lineHeight:1.8}}>
+        Принесём прямо к ПК #{myPC}<br/>
+        <span style={{color:C.neon}}>Ожидай 5–10 минут</span>
+      </div>
+      {payMethod==="balance"&&<div style={{marginTop:12,fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted}}>Списано с баланса: <span style={{color:C.yellow}}>{cartTotal} руб</span></div>}
+      {payMethod==="cash"&&<div style={{marginTop:12,fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted}}>Оплата наличными при получении: <span style={{color:C.yellow}}>{cartTotal} руб</span></div>}
+    </div>
+  );
+
+  // Cart overlay
+  if(showCart) return(
+    <div style={{display:"flex",flexDirection:"column",flex:1,overflowY:"auto"}}>
+      <div style={{padding:"16px 18px 0",display:"flex",alignItems:"center",gap:12}}>
+        <button onClick={()=>setShowCart(false)} style={{background:"transparent",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"6px 14px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12,letterSpacing:"0.1em"}}>← НАЗАД</button>
+        <SectionHead label="КОРЗИНА"/>
+      </div>
+      <div style={{padding:"0 18px",flex:1,overflowY:"auto"}}>
+        {Object.entries(cart).map(([id,qty])=>{
+          const item=MENU_CATS.flatMap(c=>c.items).find(i=>i.id===id);
+          if(!item)return null;
+          return(
+            <div key={id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:`1px solid rgba(57,255,20,0.08)`}}>
+              <span style={{fontSize:22}}>{item.emoji}</span>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,fontWeight:600}}>{item.name}</div>
+                <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted}}>{item.price} руб × {qty}</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <button onClick={()=>removeItem(id)} style={{width:28,height:28,borderRadius:"50%",background:"rgba(255,45,45,0.1)",border:"1px solid rgba(255,45,45,0.3)",color:C.red,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+                <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon,minWidth:20,textAlign:"center"}}>{qty}</span>
+                <button onClick={()=>addItem(id)} style={{width:28,height:28,borderRadius:"50%",background:C.neonGlow,border:`1px solid ${C.neonBorder}`,color:C.neon,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+              </div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.neon,minWidth:56,textAlign:"right"}}>{item.price*qty} р</div>
+            </div>
+          );
+        })}
+
+        <SectionHead label="СПОСОБ ОПЛАТЫ"/>
+        {[
+          {id:"balance",label:"С баланса",sub:`Доступно: ${balance} руб`,icon:"💳",disabled:balance<cartTotal},
+          {id:"cash",label:"Наличными",sub:"Оплатить при получении",icon:"💵",disabled:false},
+        ].map(m=>(
+          <button key={m.id} onClick={()=>!m.disabled&&setPayMethod(m.id)} style={{
+            width:"100%",marginBottom:10,
+            background:payMethod===m.id?"rgba(57,255,20,0.1)":C.card,
+            border:`1.5px solid ${payMethod===m.id?C.neon:C.neonBorder}`,
+            borderRadius:12,padding:"14px 16px",cursor:m.disabled?"default":"pointer",
+            display:"flex",alignItems:"center",gap:14,opacity:m.disabled?0.4:1,
+            textAlign:"left",
+          }}>
+            <span style={{fontSize:24}}>{m.icon}</span>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:payMethod===m.id?C.neon:C.text,fontWeight:600}}>{m.label}</div>
+              <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted}}>{m.disabled&&m.id==="balance"?`Не хватает ${cartTotal-balance} руб`:m.sub}</div>
+            </div>
+            <div style={{width:20,height:20,borderRadius:"50%",border:`2px solid ${payMethod===m.id?C.neon:C.muted}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              {payMethod===m.id&&<div style={{width:10,height:10,borderRadius:"50%",background:C.neon}}/>}
+            </div>
+          </button>
+        ))}
+
+        <div style={{marginTop:8,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.1em"}}>ИТОГО</div>
+            <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted,marginTop:2}}>Доставка к ПК #{myPC}</div>
+          </div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,color:C.neon,textShadow:`0 0 12px ${C.neonGlow}`}}>{cartTotal} РУБ</div>
+        </div>
+        <div style={{marginTop:12}}>
+          <NeonBtn onClick={confirmOrder} disabled={payMethod==="balance"&&balance<cartTotal}>
+            ЗАКАЗАТЬ 🛵
+          </NeonBtn>
+        </div>
+      </div>
+      <div style={{height:90}}/>
+    </div>
+  );
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",flex:1,minHeight:0}}>
+      {/* Cat tabs */}
+      <div style={{display:"flex",gap:6,padding:"14px 18px 0",overflowX:"auto",flexShrink:0}}>
+        {MENU_CATS.map(c=>(
+          <button key={c.id} onClick={()=>setCat(c.id)} style={{
+            flexShrink:0,border:`1px solid ${cat===c.id?C.neon:C.neonBorder}`,
+            borderRadius:20,padding:"7px 14px",
+            background:cat===c.id?"rgba(57,255,20,0.12)":C.card,
+            fontFamily:"'Oswald',sans-serif",fontSize:12,letterSpacing:"0.08em",
+            color:cat===c.id?C.neon:C.muted,cursor:"pointer",
+            boxShadow:cat===c.id?`0 0 10px ${C.neonGlow}`:"none",
+            whiteSpace:"nowrap",
+          }}>{c.label}</button>
+        ))}
+      </div>
+
+      {/* delivery notice */}
+      <div style={{margin:"12px 18px 0",background:"rgba(0,229,255,0.07)",border:"1px solid rgba(0,229,255,0.2)",borderRadius:10,padding:"10px 14px",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <span style={{fontSize:18}}>🛵</span>
+        <span style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:C.cyan}}>Доставляем прямо к твоему компьютеру · 5–10 мин</span>
+      </div>
+
+      {/* Items */}
+      <div style={{flex:1,overflowY:"auto",padding:"0 18px"}}>
+        <SectionHead label={currentCat.label}/>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {currentCat.items.map(item=>{
+            const qty=cart[item.id]||0;
+            return(
+              <div key={item.id} style={{
+                background:C.card,border:`1px solid ${qty>0?C.neonBorder:"rgba(57,255,20,0.1)"}`,
+                borderRadius:14,padding:"14px 16px",
+                display:"flex",alignItems:"center",gap:14,
+                boxShadow:qty>0?`0 0 12px ${C.neonGlow}`:"none",
+                transition:"all 0.15s",
+              }}>
+                <span style={{fontSize:28,flexShrink:0}}>{item.emoji}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontFamily:"'Oswald',sans-serif",fontSize:15,color:C.text,fontWeight:600}}>{item.name}</div>
+                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted,marginTop:2}}>{item.desc}</div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:0,flexShrink:0}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon,marginRight:12}}>{item.price}<span style={{fontSize:12,color:C.muted}}> р</span></div>
+                  {qty===0?(
+                    <button onClick={()=>addItem(item.id)} style={{width:34,height:34,borderRadius:10,background:"rgba(57,255,20,0.1)",border:`1px solid ${C.neonBorder}`,color:C.neon,cursor:"pointer",fontSize:20,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 0 8px ${C.neonGlow}`}}>+</button>
+                  ):(
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <button onClick={()=>removeItem(item.id)} style={{width:30,height:30,borderRadius:8,background:"rgba(255,45,45,0.1)",border:"1px solid rgba(255,45,45,0.3)",color:C.red,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon,minWidth:18,textAlign:"center"}}>{qty}</span>
+                      <button onClick={()=>addItem(item.id)} style={{width:30,height:30,borderRadius:8,background:"rgba(57,255,20,0.1)",border:`1px solid ${C.neonBorder}`,color:C.neon,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{height:cartCount>0?130:90}}/>
+      </div>
+
+      {/* Cart FAB */}
+      {cartCount>0&&(
+        <div style={{position:"absolute",bottom:72,left:18,right:18,zIndex:50}}>
+          <button onClick={()=>setShowCart(true)} className="slide-up" style={{
+            width:"100%",background:`linear-gradient(90deg,#1a4d00,#2d8500)`,
+            border:`1px solid ${C.neon}60`,borderRadius:14,padding:"14px 20px",
+            display:"flex",alignItems:"center",justifyContent:"space-between",
+            cursor:"pointer",boxShadow:`0 0 24px rgba(57,255,20,0.3)`,
+          }}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.neon,background:"rgba(57,255,20,0.2)",borderRadius:8,padding:"2px 10px"}}>{cartCount}</span>
+              <span style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,letterSpacing:"0.08em"}}>КОРЗИНА</span>
+            </div>
+            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:C.neon,textShadow:`0 0 10px ${C.neon}`}}>{cartTotal} РУБ →</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED CHAT UI (used by both user ChatScreen and admin AdminChat)
+// ─────────────────────────────────────────────────────────────────────────────
+function ChatUI({msgs,onSend,isAdmin,typing,quickReplies}){
+  const [input,setInput]=useState("");
+  const endRef=useRef(null);
+  useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[msgs,typing]);
+
+  const send=()=>{if(!input.trim())return;onSend(input.trim());setInput("");};
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",flex:1,minHeight:0}}>
+      {/* Header */}
+      <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.neonBorder}`,display:"flex",alignItems:"center",gap:12,flexShrink:0,background:"rgba(57,255,20,0.02)"}}>
+        <div style={{width:42,height:42,borderRadius:12,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`2px solid ${C.neon}50`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>
+          {isAdmin?"👾":"🎮"}
+        </div>
+        <div>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:15,color:C.text,fontWeight:700}}>
+            {isAdmin?"АРТЁМ (ПК #7)":"LEVEL UP ADMIN"}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:5,marginTop:2}}>
+            <div style={{width:7,height:7,borderRadius:"50%",background:C.neon,boxShadow:`0 0 6px ${C.neon}`}} className="blink"/>
+            <span style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.neon}}>
+              {isAdmin?"в сети · ПК #7":"онлайн · быстро отвечает"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div style={{flex:1,overflowY:"auto",padding:"14px 18px",display:"flex",flexDirection:"column",gap:10}}>
+        {msgs.map(msg=>{
+          // from user's perspective: "user" msgs are theirs (right), "admin" is left
+          // from admin's perspective: flip — "admin" msgs are theirs (right), "user" is left
+          const isMine = isAdmin ? msg.from==="admin" : msg.from==="user";
+          const avatarEmoji = isAdmin ? "👾" : "🎮";
+          return(
+            <div key={msg.id} className="msg-in" style={{display:"flex",justifyContent:isMine?"flex-end":"flex-start"}}>
+              {!isMine&&(
+                <div style={{width:32,height:32,borderRadius:10,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`1px solid ${C.neon}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,marginRight:8,flexShrink:0,alignSelf:"flex-end"}}>{avatarEmoji}</div>
+              )}
+              <div style={{maxWidth:"72%"}}>
+                <div style={{
+                  background:isMine?`linear-gradient(135deg,#1a4d00,#2d8500)`:C.card,
+                  border:`1px solid ${isMine?C.neon+"50":C.neonBorder}`,
+                  borderRadius:isMine?"16px 16px 4px 16px":"16px 16px 16px 4px",
+                  padding:"10px 14px",
+                  boxShadow:isMine?`0 0 12px rgba(57,255,20,0.2)`:"none",
+                }}>
+                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:14,color:C.text,lineHeight:1.5}}>{msg.text}</div>
+                </div>
+                <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted,marginTop:3,textAlign:isMine?"right":"left"}}>{msg.time}</div>
+              </div>
+            </div>
+          );
+        })}
+        {typing&&(
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:32,height:32,borderRadius:10,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`1px solid ${C.neon}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>
+              {isAdmin?"👾":"🎮"}
+            </div>
+            <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:"16px 16px 16px 4px",padding:"10px 16px"}}>
+              <div style={{display:"flex",gap:4}}>
+                {[0,1,2].map(i=>(
+                  <div key={i} style={{width:7,height:7,borderRadius:"50%",background:C.neon,opacity:0.7,animation:`blink 1.2s ${i*0.3}s infinite`}}/>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={endRef}/>
+      </div>
+
+      {/* Quick replies */}
+      {quickReplies&&(
+        <div style={{padding:"8px 18px 6px",display:"flex",gap:6,overflowX:"auto",flexShrink:0}}>
+          {quickReplies.map(q=>(
+            <button key={q} onClick={()=>setInput(q)} style={{flexShrink:0,border:`1px solid ${C.neonBorder}`,borderRadius:20,padding:"5px 12px",background:C.card,fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted,cursor:"pointer",whiteSpace:"nowrap"}}>{q}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Input */}
+      <div style={{padding:"8px 18px 12px",display:"flex",gap:10,flexShrink:0,borderTop:`1px solid ${C.neonBorder}`,background:C.bg}}>
+        <input
+          value={input} onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&send()}
+          placeholder={isAdmin?"Ответить игроку...":"Напиши сообщение..."}
+          style={{flex:1,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none"}}
+        />
+        <button onClick={send} style={{width:46,height:46,borderRadius:12,background:`linear-gradient(135deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}50`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,boxShadow:`0 0 12px ${C.neonGlow}`}}>
+          ➤
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHAT SCREEN (user side)
+// ─────────────────────────────────────────────────────────────────────────────
+function ChatScreen({msgs,onUserSend,onRead,adminTyping}){
+  useEffect(()=>{onRead();},[]);
+  return(
+    <ChatUI
+      msgs={msgs}
+      onSend={onUserSend}
+      isAdmin={false}
+      typing={adminTyping}
+      quickReplies={["Позови в зал 🔔","Нужна помощь","Когда освободится ПК?","Продлить время"]}
+    />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFILE SCREEN (with balance top-up)
+// ─────────────────────────────────────────────────────────────────────────────
+function ProfileScreen({balance,onBalanceChange}){
+  const [showTopup,setShowTopup]=useState(false);
+  const history=[
+    {date:"14 ИЮН",pc:7,hours:3,cost:90,game:"CS2"},
+    {date:"11 ИЮН",pc:12,hours:2,cost:60,game:"Dota 2"},
+    {date:"8 ИЮН",pc:3,hours:4,cost:120,game:"Valorant"},
+  ];
+  const balanceHistory=[
+    {date:"14 ИЮН",type:"top",amount:500,method:"Пополнение от админа"},
+    {date:"11 ИЮН",type:"spend",amount:-60,method:"Заказ: Бургер + Кола"},
+    {date:"8 ИЮН",type:"top",amount:200,method:"Пополнение от админа"},
+  ];
+
+  return(
+    <div style={{overflowY:"auto",flex:1,padding:"0 18px"}}>
+      {/* Profile card */}
+      <div style={{marginTop:16,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:16,padding:18,position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${C.neon},transparent)`}}/>
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <div style={{width:60,height:60,borderRadius:16,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`2px solid ${C.neon}50`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,boxShadow:`0 0 16px ${C.neonGlow}`,flexShrink:0}}>👾</div>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:C.text,lineHeight:1}}>АРТЁМ</div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.neon,marginTop:3,letterSpacing:"0.15em"}}>MEMBER #0041</div>
+            <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted,marginTop:2}}>С нами с января 2024</div>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginTop:16}}>
+          {[["47 Ч","ВСЕГО"],["18","СЕССИЙ"],["5 600","ПОТРАЧЕНО"]].map(([v,l])=>(
+            <div key={l} style={{textAlign:"center"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:C.neon,lineHeight:1}}>{v}</div>
+              <div style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>{l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Balance card */}
+      <div style={{marginTop:12,background:"rgba(57,255,20,0.06)",border:`1px solid ${C.neonBorder}`,borderRadius:16,padding:18,position:"relative",overflow:"hidden",boxShadow:`0 0 20px ${C.neonGlow}`}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:C.neon}}/>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.18em"}}>МОЙ БАЛАНС</div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:46,color:C.neon,lineHeight:1,marginTop:4,textShadow:`0 0 20px ${C.neonGlow}`}}>{balance}<span style={{fontSize:20}}> РУБ</span></div>
+          </div>
+          <button onClick={()=>setShowTopup(!showTopup)} style={{background:"rgba(57,255,20,0.12)",border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"9px 16px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12,letterSpacing:"0.1em",flexShrink:0}}>
+            + ПОПОЛНИТЬ
+          </button>
+        </div>
+        {showTopup&&(
+          <div className="slide-up" style={{marginTop:14,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:14}}>
+            <div style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>
+              💳 Пополнение через администратора.<br/>
+              Подойди на стойку или напиши в чат — мы зачислим деньги на твой баланс.
+            </div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.12em",marginBottom:8}}>БЫСТРЫЕ СУММЫ</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+              {[100,200,500,1000].map(amt=>(
+                <button key={amt} onClick={()=>onBalanceChange(amt)} style={{background:"rgba(57,255,20,0.08)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"10px 0",color:C.neon,cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:16,boxShadow:`0 0 8px ${C.neonGlow}`}}>
+                  {amt}
+                </button>
+              ))}
+            </div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,marginTop:10,textAlign:"center"}}>
+              * Реальное пополнение производит администратор
+            </div>
+          </div>
+        )}
+
+        {/* Balance history */}
+        <div style={{marginTop:14}}>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>ИСТОРИЯ БАЛАНСА</div>
+          {balanceHistory.map((h,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:i<balanceHistory.length-1?"1px solid rgba(57,255,20,0.06)":"none"}}>
+              <div>
+                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.text}}>{h.method}</div>
+                <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{h.date}</div>
+              </div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:h.type==="top"?C.neon:C.red}}>
+                {h.type==="top"?"+":""}{h.amount} Р
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Active session */}
+      <div style={{marginTop:12,background:"rgba(57,255,20,0.06)",border:`1px solid ${C.neonBorder}`,borderRadius:14,padding:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:7}}>
+            <div style={{width:7,height:7,borderRadius:"50%",background:C.neon,boxShadow:`0 0 6px ${C.neon}`}} className="blink"/>
+            <span style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.neon,letterSpacing:"0.1em",fontWeight:600}}>АКТИВНАЯ СЕССИЯ</span>
+          </div>
+          <span style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.muted}}>ПК #7 · CS2</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:10}}>
+          <div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.1em"}}>ОСТАЛОСЬ</div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:36,color:C.text,lineHeight:1}}>1:42</div>
+          </div>
+          <button style={{background:"rgba(57,255,20,0.08)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"8px 14px",fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.neon,cursor:"pointer",letterSpacing:"0.08em"}}>+ ПРОДЛИТЬ</button>
+        </div>
+        <div style={{height:4,borderRadius:4,background:"rgba(57,255,20,0.12)"}}>
+          <div style={{width:"58%",height:"100%",borderRadius:4,background:C.neon,boxShadow:`0 0 6px ${C.neon}`}}/>
+        </div>
+      </div>
+
+      <SectionHead label="ИСТОРИЯ СЕССИЙ"/>
+      {history.map((h,i)=>(
+        <div key={i} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,background:C.card,border:"1px solid rgba(57,255,20,0.09)",borderRadius:12,padding:"12px 16px"}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,color:C.neon,letterSpacing:"0.1em",minWidth:46,lineHeight:1.2}}>{h.date}</div>
+          <div style={{flex:1}}>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.text,fontWeight:600}}>ПК #{h.pc} · {h.game}</div>
+            <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{h.hours} ч.</div>
+          </div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.neon}}>{h.cost} РУБ</div>
+        </div>
+      ))}
+      <div style={{height:90}}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN PIN GATE
+// ─────────────────────────────────────────────────────────────────────────────
+const ADMIN_PIN="1337";
+
+function AdminPinGate({onSuccess,onCancel}){
+  const [digits,setDigits]=useState([]);
+  const [shake,setShake]=useState(false);
+  const [wrongCount,setWrongCount]=useState(0);
+
+  const press=(d)=>{
+    if(digits.length>=4)return;
+    const next=[...digits,d];
+    setDigits(next);
+    if(next.length===4){
+      if(next.join("")===ADMIN_PIN){
+        setTimeout(()=>onSuccess(),200);
+      } else {
+        setShake(true);
+        setWrongCount(w=>w+1);
+        setTimeout(()=>{setDigits([]);setShake(false);},600);
+      }
+    }
+  };
+  const del=()=>setDigits(d=>d.slice(0,-1));
+  const keys=["1","2","3","4","5","6","7","8","9","","0","⌫"];
+
+  return(
+    <div style={{position:"absolute",inset:0,zIndex:600,background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32}}>
+      <div style={{position:"absolute",inset:0,background:"repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(57,255,20,0.011) 2px,rgba(57,255,20,0.011) 4px)",pointerEvents:"none"}}/>
+      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(6px)}}`}</style>
+      <div style={{position:"relative",zIndex:1,width:"100%",maxWidth:300,display:"flex",flexDirection:"column",alignItems:"center"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,color:C.red,letterSpacing:"0.25em",marginBottom:8}}>🔐 ADMIN ACCESS</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:C.text,letterSpacing:"0.04em",marginBottom:4}}>КОД ДОСТУПА</div>
+        <div style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:C.muted,marginBottom:32,textAlign:"center",minHeight:18}}>
+          {wrongCount>0?<span style={{color:C.red}}>Неверный код · Попытка {wrongCount}</span>:"Введи 4-значный пин-код"}
+        </div>
+        {/* dots */}
+        <div style={{display:"flex",gap:18,marginBottom:36,animation:shake?"shake 0.5s ease":"none"}}>
+          {[0,1,2,3].map(i=>(
+            <div key={i} style={{width:18,height:18,borderRadius:"50%",background:i<digits.length?(shake?C.red:C.neon):"transparent",border:`2px solid ${i<digits.length?(shake?C.red:C.neon):C.neonBorder}`,boxShadow:i<digits.length?`0 0 10px ${shake?C.red:C.neon}`:"none",transition:"all 0.15s"}}/>
+          ))}
+        </div>
+        {/* keypad */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,width:"100%"}}>
+          {keys.map((k,i)=>(
+            k===""?<div key={i}/>:
+            <button key={i} onClick={()=>k==="⌫"?del():press(k)} style={{padding:"18px 0",borderRadius:14,background:k==="⌫"?"rgba(255,45,45,0.08)":"rgba(57,255,20,0.06)",border:`1px solid ${k==="⌫"?"rgba(255,45,45,0.25)":C.neonBorder}`,color:k==="⌫"?C.red:C.text,fontFamily:"'Bebas Neue',sans-serif",fontSize:k==="⌫"?22:26,cursor:"pointer",letterSpacing:"0.04em",transition:"background 0.1s"}}>{k}</button>
+          ))}
+        </div>
+        <button onClick={onCancel} style={{marginTop:28,background:"transparent",border:"none",fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.muted,cursor:"pointer",letterSpacing:"0.1em"}}>ОТМЕНА</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminSend,userTyping}){
+  const [tab,setTab]=useState("orders");
+  const [topupAmt,setTopupAmt]=useState("200");
+  const [topupUser,setTopupUser]=useState("Артём");
+
+  const users=["Артём","Саша","Влад","Кирилл","Женя"];
+
+  return(
+    <div style={{
+      position:"absolute",inset:0,zIndex:500,
+      background:C.bg,display:"flex",flexDirection:"column",
+    }}>
+      {/* Admin header */}
+      <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.neonBorder}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:"rgba(255,45,45,0.04)"}}>
+        <div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:C.red,letterSpacing:"0.04em"}}>🔐 ADMIN PANEL</div>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted,letterSpacing:"0.2em"}}>LEVEL UP ОРША</div>
+        </div>
+        <button onClick={onClose} style={{background:"rgba(255,45,45,0.1)",border:"1px solid rgba(255,45,45,0.3)",borderRadius:10,padding:"8px 14px",color:C.red,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12,letterSpacing:"0.1em"}}>ВЫЙТИ</button>
+      </div>
+
+      {/* Admin tabs */}
+      <div style={{display:"flex",borderBottom:`1px solid ${C.neonBorder}`,flexShrink:0}}>
+        {[{id:"orders",label:"ЗАКАЗЫ"},{id:"chat",label:"ЧАТ"},{id:"topup",label:"БАЛАНС"},{id:"pcs",label:"КОМПЫ"}].map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{
+            flex:1,padding:"11px 0",border:"none",background:"none",cursor:"pointer",
+            fontFamily:"'Oswald',sans-serif",fontSize:11,letterSpacing:"0.12em",
+            color:tab===t.id?C.neon:C.muted,
+            borderBottom:`2px solid ${tab===t.id?C.neon:"transparent"}`,
+            transition:"all 0.15s",
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,overflow:"hidden"}}>
+        {tab==="chat"&&(
+          <ChatUI
+            msgs={chatMsgs}
+            onSend={onAdminSend}
+            isAdmin={true}
+            typing={userTyping}
+            quickReplies={["Уже несу! 🛵","Окей, минуту 👍","Уточни ПК?","Готово ✅"]}
+          />
+        )}
+        <div style={{display:tab==="chat"?"none":"flex",flexDirection:"column",flex:1,overflowY:"auto",padding:"0 18px"}}>
+        {/* ORDERS TAB */}
+        {tab==="orders"&&(
+          <>
+            <SectionHead label={`АКТИВНЫЕ ЗАКАЗЫ ${orders.length>0?`(${orders.length})`:""}`} color={C.red}/>
+            {orders.length===0&&(
+              <div style={{textAlign:"center",padding:"40px 0",fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.muted}}>
+                🎮 Заказов пока нет
+              </div>
+            )}
+            {orders.map(o=>(
+              <div key={o.id} className="slide-up" style={{marginBottom:12,background:C.card,border:`1px solid ${C.red}30`,borderRadius:14,padding:16,position:"relative",overflow:"hidden"}}>
+                <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:C.red}}/>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                  <div>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:C.text}}>ПК <span style={{color:C.neon}}>#{o.pc}</span></div>
+                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,marginTop:2}}>
+                      {o.time} · {o.payMethod==="balance"?"💳 Баланс":"💵 Наличные"}
+                    </div>
+                  </div>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.yellow}}>{o.total} РУБ</div>
+                </div>
+                <div style={{marginBottom:12}}>
+                  {o.items.map((item,i)=>(
+                    <div key={i} style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:C.muted,lineHeight:1.8}}>
+                      {item.emoji} {item.name} × {item.qty} — {item.price*item.qty} руб
+                    </div>
+                  ))}
+                </div>
+                <button onClick={()=>onDeliverOrder(o.id)} style={{
+                  width:"100%",background:"rgba(57,255,20,0.08)",border:`1px solid ${C.neonBorder}`,
+                  borderRadius:10,padding:"11px",
+                  fontFamily:"'Oswald',sans-serif",fontSize:13,letterSpacing:"0.1em",
+                  color:C.neon,cursor:"pointer",
+                }}>✅ ДОСТАВЛЕНО</button>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* TOPUP TAB */}
+        {tab==="topup"&&(
+          <>
+            <SectionHead label="ПОПОЛНЕНИЕ БАЛАНСА" color={C.neon}/>
+            <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:14,padding:18}}>
+              <div style={{marginBottom:14}}>
+                <label style={{fontFamily:"'Oswald',sans-serif",fontSize:10,letterSpacing:"0.18em",color:C.muted,display:"block",marginBottom:7}}>ИГРОК</label>
+                <select value={topupUser} onChange={e=>setTopupUser(e.target.value)} style={{width:"100%",background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none",appearance:"none",colorScheme:"dark"}}>
+                  {users.map(u=><option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{fontFamily:"'Oswald',sans-serif",fontSize:10,letterSpacing:"0.18em",color:C.muted,display:"block",marginBottom:7}}>СУММА (РУБ)</label>
+                <input type="number" value={topupAmt} onChange={e=>setTopupAmt(e.target.value)}
+                  style={{width:"100%",background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"12px 14px",color:C.text,fontSize:22,fontFamily:"'Bebas Neue',sans-serif",outline:"none",colorScheme:"dark"}}/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:14}}>
+                {[50,100,200,500].map(a=>(
+                  <button key={a} onClick={()=>setTopupAmt(String(a))} style={{background:"rgba(57,255,20,0.07)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"9px 0",color:C.neon,cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:16}}>{a}</button>
+                ))}
+              </div>
+              <button onClick={()=>{if(topupAmt>0){onTopupUser(topupUser,parseInt(topupAmt));setTopupAmt("200");}}} style={{
+                width:"100%",background:`linear-gradient(90deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}60`,
+                borderRadius:12,padding:"14px",fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
+                color:C.neon,cursor:"pointer",boxShadow:`0 0 18px rgba(57,255,20,0.2)`,textShadow:`0 0 8px ${C.neon}`,
+              }}>+ ЗАЧИСЛИТЬ {topupAmt||0} РУБ</button>
+            </div>
+
+            <SectionHead label="БАЛАНСЫ ИГРОКОВ" color={C.muted}/>
+            {[["Артём","#0041",850],["Саша","#0038",320],["Влад","#0055",1200],["Кирилл","#0029",50],["Женя","#0061",490]].map(([n,id,b])=>(
+              <div key={n} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",marginBottom:8,background:C.card,border:"1px solid rgba(57,255,20,0.1)",borderRadius:12}}>
+                <div>
+                  <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,fontWeight:600}}>{n}</div>
+                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{id}</div>
+                </div>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:b<100?C.red:C.neon}}>{b} РУБ</div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* PCS TAB */}
+        {tab==="pcs"&&(
+          <>
+            <SectionHead label="СТАТУС КОМПЬЮТЕРОВ" color={C.cyan}/>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
+              {COMPUTERS.map(pc=>{
+                const s=ST[pc.status];
+                return(
+                  <div key={pc.id} style={{background:C.card,border:`1px solid ${s.color}30`,borderRadius:12,padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.text}}>ПК #{pc.id}</span>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:s.color,boxShadow:`0 0 5px ${s.color}`}}/>
+                    </div>
+                    <div style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:s.color,letterSpacing:"0.1em",marginBottom:4}}>{s.label}</div>
+                    <div style={{fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted}}>{pc.zone}</div>
+                    {pc.timeLeft&&<div style={{fontFamily:"'Inter',sans-serif",fontSize:9,color:C.muted,marginTop:2}}>{pc.game} · {pc.timeLeft}мин</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+        <div style={{height:30}}/>
+        </div>{/* end scrollable tab content */}
+      </div>{/* end flex wrapper */}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TARIFFS SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function TariffsScreen(){
+  return(
+    <div style={{padding:"0 18px",overflowY:"auto",flex:1}}>
+      <div style={{marginTop:16,background:"rgba(255,214,0,0.07)",border:"1px solid rgba(255,214,0,0.22)",borderRadius:14,padding:"16px 18px",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:C.yellow}}/>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:11,color:C.yellow,letterSpacing:"0.2em"}}>ВСЮ СУББОТУ</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:42,color:C.text,lineHeight:1,margin:"2px 0"}}>СКИДКА <span style={{color:C.yellow}}>50%</span></div>
+        <div style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.muted}}>Играй больше · Плати меньше</div>
+      </div>
+
+      <SectionHead label="ТАРИФЫ"/>
+      <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:14,overflow:"hidden",marginBottom:14}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 72px 72px",background:"rgba(57,255,20,0.07)",borderBottom:`1px solid ${C.neonBorder}`,padding:"9px 16px"}}>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.neon,letterSpacing:"0.15em"}}>ТАРИФ</div>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.neon,letterSpacing:"0.1em",textAlign:"center"}}>STD</div>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.yellow,letterSpacing:"0.1em",textAlign:"center"}}>VIP</div>
+        </div>
+        {TARIFFS.map((t,i)=>(
+          <div key={t.name} style={{display:"grid",gridTemplateColumns:"1fr 72px 72px",padding:"13px 16px",borderBottom:i<TARIFFS.length-1?`1px solid rgba(57,255,20,0.07)`:"none",alignItems:"center"}}>
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:7}}>
+                <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,color:C.text,letterSpacing:"0.04em"}}>{t.name}</span>
+                {t.tag&&<span style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.neon,background:"rgba(57,255,20,0.1)",border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"1px 7px"}}>{t.tag}</span>}
+              </div>
+              <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{t.hours}</div>
+            </div>
+            <div style={{textAlign:"center",fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.neon}}>{t.std}<span style={{fontSize:11,color:C.muted}}> р</span></div>
+            <div style={{textAlign:"center",fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.yellow}}>{t.vip}<span style={{fontSize:11,color:C.muted}}> р</span></div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:"rgba(176,38,255,0.07)",border:"1px solid rgba(176,38,255,0.2)",borderRadius:14,padding:16,marginBottom:12,position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:C.purple}}/>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.purple,letterSpacing:"0.1em",marginBottom:6}}>CASHBACK 5%</div>
+        <div style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:C.muted,lineHeight:1.7}}>С каждой сессии 5% возвращается на баланс. Накопил 500 руб — час в подарок.</div>
+      </div>
+      <div style={{height:90}}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EVENTS SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+function EventsScreen(){
+  return(
+    <div style={{padding:"0 18px",overflowY:"auto",flex:1}}>
+      <SectionHead label="БЛИЖАЙШИЕ СОБЫТИЯ"/>
+      {EVENTS.map(ev=>(
+        <div key={ev.title} style={{marginBottom:12,background:C.card,border:`1px solid ${ev.color}25`,borderRadius:14,padding:"16px",position:"relative",overflow:"hidden"}}>
+          <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${ev.color},transparent)`}}/>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.text,letterSpacing:"0.04em",lineHeight:1}}>{ev.emoji} {ev.title}</div>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.muted,marginTop:4}}>📅 {ev.date} · {ev.sub}</div>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:ev.color,marginTop:5,fontWeight:600}}>🏆 ПРИЗ: {ev.prize}</div>
+          <button style={{marginTop:12,width:"100%",background:`${ev.color}10`,border:`1px solid ${ev.color}35`,borderRadius:8,padding:"9px",fontFamily:"'Oswald',sans-serif",fontSize:12,letterSpacing:"0.1em",color:ev.color,cursor:"pointer",fontWeight:600}}>ЗАРЕГИСТРИРОВАТЬСЯ</button>
+        </div>
+      ))}
+      <SectionHead label="ТОП МЕСЯЦА"/>
+      {LEADERS.map((p,i)=>(
+        <div key={p.name} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,background:i===0?"rgba(255,214,0,0.06)":C.card,border:`1px solid ${i===0?"rgba(255,214,0,0.18)":"rgba(57,255,20,0.09)"}`,borderRadius:12,padding:"12px 16px"}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:i===0?C.yellow:i===1?"#C0C0C0":i===2?"#CD7F32":C.muted,minWidth:26,lineHeight:1}}>
+            {i<3?["👑","🥈","🥉"][i]:`#${p.rank}`}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,fontWeight:700}}>{p.name}</div>
+            <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{p.game}</div>
+          </div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:i===0?C.yellow:C.neon}}>{p.hours}Ч</div>
+        </div>
+      ))}
+      <div style={{height:90}}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APP ROOT
+// ─────────────────────────────────────────────────────────────────────────────
+export default function App(){
+  const [tab,setTab]=useState("map");
+  const [bookPC,setBookPC]=useState(null);
+  const [balance,setBalance]=useState(850);
+  const [chatUnread,setChatUnread]=useState(2);
+  const [showAdmin,setShowAdmin]=useState(false);
+  const [showPinGate,setShowPinGate]=useState(false);
+  const [orders,setOrders]=useState([]);
+  const [logoTaps,setLogoTaps]=useState(0);
+  const [logoTimer,setLogoTimer]=useState(null);
+
+  // Shared chat state — both user and admin see same messages
+  const [chatMsgs,setChatMsgs]=useState([
+    {id:1,from:"admin",text:"Привет! Чем могу помочь? 👾",time:"19:41"},
+    {id:2,from:"admin",text:"Если что-то нужно — пиши, я рядом 🟢",time:"19:41"},
+  ]);
+  const [adminTyping,setAdminTyping]=useState(false);
+  const [userTyping,setUserTyping]=useState(false);
+
+  const nowStr=()=>{const d=new Date();return`${d.getHours().toString().padStart(2,"0")}:${d.getMinutes().toString().padStart(2,"0")}`;};
+
+  const adminAutoReplies=["Понял, сейчас разберёмся!","Окей, минуту 👍","Уже иду!","Сделаем 🔥","Принято! Подожди немного.","Без проблем, сейчас помогу!"];
+
+  // User sends message → simulate admin auto-reply if admin panel closed
+  const handleUserSend=(text)=>{
+    const msg={id:Date.now(),from:"user",text,time:nowStr()};
+    setChatMsgs(m=>[...m,msg]);
+    setChatUnread(0);
+    if(!showAdmin){
+      setAdminTyping(true);
+      setTimeout(()=>{
+        setAdminTyping(false);
+        setChatMsgs(m=>[...m,{id:Date.now()+1,from:"admin",text:adminAutoReplies[Math.floor(Math.random()*adminAutoReplies.length)],time:nowStr()}]);
+      },1200+Math.random()*600);
+    }
+  };
+
+  // Admin sends message from panel
+  const handleAdminSend=(text)=>{
+    const msg={id:Date.now(),from:"admin",text,time:nowStr()};
+    setChatMsgs(m=>[...m,msg]);
+    // Simulate user "seen" and typing back after a delay
+    setUserTyping(true);
+    setTimeout(()=>{
+      setUserTyping(false);
+      const userReplies=["Понял, спасибо!","Окей 👍","Хорошо, жду","Отлично!"];
+      setChatMsgs(m=>[...m,{id:Date.now()+1,from:"user",text:userReplies[Math.floor(Math.random()*userReplies.length)],time:nowStr()}]);
+      // Show unread badge if user tab not open
+      setChatUnread(u=>u+1);
+    },1500+Math.random()*800);
+  };
+
+  const handleBook=(pc)=>{setBookPC(pc);setTab("book");};
+  const handleTabChange=(t)=>{
+    setTab(t);
+    if(t!=="book")setBookPC(null);
+    if(t==="chat")setChatUnread(0);
+  };
+  const handleBalanceChange=(delta)=>setBalance(b=>Math.max(0,b+delta));
+  const handleOrderNotify=(pc,total,payMethod)=>{
+    const t=nowStr();
+    setOrders(o=>[...o,{id:Date.now(),pc,total,payMethod,time:t,items:[{name:"Заказ из меню",emoji:"📦",price:total,qty:1}]}]);
+    // Push a message into chat notifying admin
+    const note={id:Date.now()+2,from:"user",text:`🛵 Новый заказ к ПК #${pc} на ${total} руб (${payMethod==="balance"?"💳 баланс":"💵 наличные"})`,time:t};
+    setChatMsgs(m=>[...m,note]);
+  };
+  const handleDeliverOrder=(id)=>setOrders(o=>o.filter(x=>x.id!==id));
+  const handleTopupUser=(user,amount)=>{if(user==="Артём")handleBalanceChange(amount);};
+
+  // Secret admin tap: logo 5x → PIN gate
+  const handleLogoTap=()=>{
+    if(logoTimer)clearTimeout(logoTimer);
+    const newTaps=logoTaps+1;
+    setLogoTaps(newTaps);
+    if(newTaps>=5){setShowPinGate(true);setLogoTaps(0);return;}
+    const t=setTimeout(()=>setLogoTaps(0),2000);
+    setLogoTimer(t);
+  };
+
+  const navTab=["map","book","menu","chat","profile"].includes(tab)?tab:"map";
+
+  return(
+    <>
+      <GlobalStyle/>
+      <div style={{
+        height:"100vh",background:C.bg,color:C.text,
+        fontFamily:"'Inter',system-ui,sans-serif",
+        maxWidth:430,margin:"0 auto",
+        display:"flex",flexDirection:"column",
+        position:"relative",overflow:"hidden",
+      }}>
+        <div style={{position:"absolute",inset:0,background:"repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(57,255,20,0.011) 2px,rgba(57,255,20,0.011) 4px)",pointerEvents:"none",zIndex:0}}/>
+
+        <div style={{position:"relative",zIndex:1,display:"flex",flexDirection:"column",flex:1,minHeight:0}}>
+          <div onClick={handleLogoTap} style={{cursor:"default"}}>
+            <Logo balance={balance} onBalanceTap={()=>handleTabChange("profile")}/>
+          </div>
+          <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,position:"relative"}}>
+            {tab==="map"&&<MapScreen onBook={handleBook}/>}
+            {tab==="book"&&<BookScreen preSelected={bookPC}/>}
+            {tab==="menu"&&<MenuScreen balance={balance} onBalanceChange={handleBalanceChange} onOrderNotify={handleOrderNotify}/>}
+            {tab==="chat"&&<ChatScreen msgs={chatMsgs} onUserSend={handleUserSend} onRead={()=>setChatUnread(0)} adminTyping={adminTyping}/>}
+            {tab==="profile"&&<ProfileScreen balance={balance} onBalanceChange={handleBalanceChange}/>}
+            {tab==="tariffs"&&<TariffsScreen/>}
+            {tab==="events"&&<EventsScreen/>}
+          </div>
+        </div>
+
+        <BottomNav active={navTab} onChange={handleTabChange} chatUnread={chatUnread}/>
+
+        {/* PIN gate appears first, admin panel behind it */}
+        {showPinGate&&!showAdmin&&(
+          <AdminPinGate
+            onSuccess={()=>{setShowPinGate(false);setShowAdmin(true);}}
+            onCancel={()=>setShowPinGate(false)}
+          />
+        )}
+        {showAdmin&&(
+          <AdminPanel
+            orders={orders}
+            onClose={()=>setShowAdmin(false)}
+            onDeliverOrder={handleDeliverOrder}
+            onTopupUser={handleTopupUser}
+            chatMsgs={chatMsgs}
+            onAdminSend={handleAdminSend}
+            userTyping={userTyping}
+          />
+        )}
+      </div>
+    </>
+  );
+}
