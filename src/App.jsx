@@ -9,15 +9,31 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 // ─────────────────────────────────────────────────────────────────────────────
 // TELEGRAM BOT — send notifications to user's private chat
 // ─────────────────────────────────────────────────────────────────────────────
-// Sends via Supabase Edge Function (browser can't call Telegram API directly — CORS)
+// Edge Function endpoint — keeps bot token & admin PIN on the server (not in this code)
+const API_FN = SUPABASE_URL + "/functions/v1/api";
+
+// Sends a Telegram message via the Edge Function (browser can't call Telegram directly — CORS)
 const sendBotMessage = async (chatId, text) => {
   try {
-    await fetch(SUPABASE_URL + "/functions/v1/send-tg", {
+    await fetch(API_FN, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + SUPABASE_KEY },
-      body: JSON.stringify({ chat_id: chatId, text }),
+      body: JSON.stringify({ action: "send", chat_id: chatId, text }),
     });
   } catch(e) { console.error("Bot notify failed:", e); }
+};
+
+// Verifies admin PIN against the server (PIN is never stored in this code)
+const checkAdminPin = async (pin) => {
+  try {
+    const res = await fetch(API_FN, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + SUPABASE_KEY },
+      body: JSON.stringify({ action: "check_pin", pin }),
+    });
+    const data = await res.json();
+    return data.ok === true;
+  } catch(e) { console.error("PIN check failed:", e); return false; }
 };
 
 const sb = {
@@ -1359,19 +1375,21 @@ function AdminComputerEditor({computers,zones,bookings,onRefresh}){
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN PIN GATE
 // ─────────────────────────────────────────────────────────────────────────────
-const ADMIN_PIN="1337";
-
 function AdminPinGate({onSuccess,onCancel}){
   const [digits,setDigits]=useState([]);
   const [shake,setShake]=useState(false);
   const [wrongCount,setWrongCount]=useState(0);
+  const [checking,setChecking]=useState(false);
 
-  const press=(d)=>{
-    if(digits.length>=4)return;
+  const press=async(d)=>{
+    if(digits.length>=4||checking)return;
     const next=[...digits,d];
     setDigits(next);
     if(next.length===4){
-      if(next.join("")===ADMIN_PIN){
+      setChecking(true);
+      const ok=await checkAdminPin(next.join(""));
+      setChecking(false);
+      if(ok){
         setTimeout(()=>onSuccess(),200);
       } else {
         setShake(true);
@@ -1391,7 +1409,7 @@ function AdminPinGate({onSuccess,onCancel}){
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,color:C.red,letterSpacing:"0.25em",marginBottom:8}}>🔐 ADMIN ACCESS</div>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:C.text,letterSpacing:"0.04em",marginBottom:4}}>КОД ДОСТУПА</div>
         <div style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:C.muted,marginBottom:32,textAlign:"center",minHeight:18}}>
-          {wrongCount>0?<span style={{color:C.red}}>Неверный код · Попытка {wrongCount}</span>:"Введи 4-значный пин-код"}
+          {checking?<span style={{color:C.neon}}>Проверка...</span>:wrongCount>0?<span style={{color:C.red}}>Неверный код · Попытка {wrongCount}</span>:"Введи 4-значный пин-код"}
         </div>
         {/* dots */}
         <div style={{display:"flex",gap:18,marginBottom:36,animation:shake?"shake 0.5s ease":"none"}}>
