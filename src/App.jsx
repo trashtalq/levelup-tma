@@ -90,7 +90,7 @@ const LEADERS=[
   {name:"МАКС",hours:177,game:"CS2",rank:5},
 ];
 
-const MENU_CATS=[
+const MENU_CATS_DEFAULT=[
   {id:"drinks",label:"🥤 НАПИТКИ",items:[
     {id:"d1",name:"Энергетик Monster",price:120,emoji:"⚡",desc:"330мл"},
     {id:"d2",name:"Энергетик Burn",price:100,emoji:"🔥",desc:"330мл"},
@@ -373,7 +373,7 @@ function BookScreen({preSelected}){
 // ─────────────────────────────────────────────────────────────────────────────
 // MENU SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-function MenuScreen({balance,onBalanceChange,onOrderNotify}){
+function MenuScreen({balance,onBalanceChange,onOrderNotify,menuCats}){
   const [cat,setCat]=useState("drinks");
   const [cart,setCart]=useState({});
   const [payMethod,setPayMethod]=useState("balance"); // "balance" | "cash"
@@ -385,17 +385,21 @@ function MenuScreen({balance,onBalanceChange,onOrderNotify}){
   const removeItem=(id)=>setCart(c=>{const n={...c};if(n[id]>1)n[id]--;else delete n[id];return n;});
   const cartCount=Object.values(cart).reduce((a,b)=>a+b,0);
   const cartTotal=Object.entries(cart).reduce((sum,[id,qty])=>{
-    const item=MENU_CATS.flatMap(c=>c.items).find(i=>i.id===id);
+    const item=menuCats.flatMap(c=>c.items).find(i=>i.id===id);
     return sum+(item?item.price*qty:0);
   },0);
 
-  const currentCat=MENU_CATS.find(c=>c.id===cat);
+  const currentCat=menuCats.find(c=>c.id===cat);
 
   const confirmOrder=()=>{
     if(payMethod==="balance"&&balance<cartTotal)return;
     if(payMethod==="balance")onBalanceChange(-cartTotal);
     setCart({});setShowCart(false);setOrderDone(true);
-    onOrderNotify(myPC,cartTotal,payMethod);
+    const cartItems=Object.entries(cart).map(([id,qty])=>{
+      const item=menuCats.flatMap(cat=>cat.items).find(i=>i.id===id);
+      return item?{name:item.name,emoji:item.emoji,price:item.price,qty}:null;
+    }).filter(Boolean);
+    onOrderNotify(myPC,cartTotal,payMethod,cartItems);
     setTimeout(()=>setOrderDone(false),4000);
   };
 
@@ -421,7 +425,7 @@ function MenuScreen({balance,onBalanceChange,onOrderNotify}){
       </div>
       <div style={{padding:"0 18px",flex:1,overflowY:"auto"}}>
         {Object.entries(cart).map(([id,qty])=>{
-          const item=MENU_CATS.flatMap(c=>c.items).find(i=>i.id===id);
+          const item=menuCats.flatMap(c=>c.items).find(i=>i.id===id);
           if(!item)return null;
           return(
             <div key={id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:`1px solid rgba(57,255,20,0.08)`}}>
@@ -485,7 +489,7 @@ function MenuScreen({balance,onBalanceChange,onOrderNotify}){
     <div style={{display:"flex",flexDirection:"column",flex:1,minHeight:0}}>
       {/* Cat tabs */}
       <div style={{display:"flex",gap:6,padding:"14px 18px 0",overflowX:"auto",flexShrink:0}}>
-        {MENU_CATS.map(c=>(
+        {menuCats.map(c=>(
           <button key={c.id} onClick={()=>setCat(c.id)} style={{
             flexShrink:0,border:`1px solid ${cat===c.id?C.neon:C.neonBorder}`,
             borderRadius:20,padding:"7px 14px",
@@ -647,7 +651,7 @@ function ChatUI({msgs,onSend,isAdmin,typing,quickReplies}){
       )}
 
       {/* Input */}
-      <div style={{padding:"8px 18px 12px",display:"flex",gap:10,flexShrink:0,borderTop:`1px solid ${C.neonBorder}`,background:C.bg}}>
+      <div style={{padding:"8px 18px 12px",paddingBottom:"calc(12px + env(safe-area-inset-bottom))",display:"flex",gap:10,flexShrink:0,borderTop:`1px solid ${C.neonBorder}`,background:C.bg,marginBottom:58}}>
         <input
           value={input} onChange={e=>setInput(e.target.value)}
           onKeyDown={e=>e.key==="Enter"&&send()}
@@ -862,7 +866,7 @@ function AdminPinGate({onSuccess,onCancel}){
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN PANEL
 // ─────────────────────────────────────────────────────────────────────────────
-function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminSend,userTyping}){
+function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminSend,userTyping,balance,adminUnread,menuCats,onMenuChange}){
   const [tab,setTab]=useState("orders");
   const [topupAmt,setTopupAmt]=useState("200");
   const [topupUser,setTopupUser]=useState("Артём");
@@ -885,14 +889,17 @@ function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminS
 
       {/* Admin tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${C.neonBorder}`,flexShrink:0}}>
-        {[{id:"orders",label:"ЗАКАЗЫ"},{id:"chat",label:"ЧАТ"},{id:"topup",label:"БАЛАНС"},{id:"pcs",label:"КОМПЫ"}].map(t=>(
+        {[{id:"orders",label:"ЗАКАЗЫ"},{id:"chat",label:"ЧАТ"},{id:"topup",label:"БАЛАНС"},{id:"menu",label:"МЕНЮ"},{id:"pcs",label:"КОМПЫ"}].map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} style={{
             flex:1,padding:"11px 0",border:"none",background:"none",cursor:"pointer",
             fontFamily:"'Oswald',sans-serif",fontSize:11,letterSpacing:"0.12em",
             color:tab===t.id?C.neon:C.muted,
             borderBottom:`2px solid ${tab===t.id?C.neon:"transparent"}`,
-            transition:"all 0.15s",
-          }}>{t.label}</button>
+            transition:"all 0.15s",position:"relative",
+          }}>
+            {t.id==="chat"&&adminUnread>0&&<div style={{position:"absolute",top:6,right:"20%",width:16,height:16,borderRadius:"50%",background:C.red,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#fff",fontWeight:700}}>{adminUnread}</div>}
+            {t.label}
+          </button>
         ))}
       </div>
 
@@ -975,13 +982,45 @@ function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminS
             </div>
 
             <SectionHead label="БАЛАНСЫ ИГРОКОВ" color={C.muted}/>
-            {[["Артём","#0041",850],["Саша","#0038",320],["Влад","#0055",1200],["Кирилл","#0029",50],["Женя","#0061",490]].map(([n,id,b])=>(
-              <div key={n} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",marginBottom:8,background:C.card,border:"1px solid rgba(57,255,20,0.1)",borderRadius:12}}>
+            {/* Артём — живой баланс из стейта; остальные — заглушки */}
+            {[["Артём","#0041",balance],["Саша","#0038",320],["Влад","#0055",1200],["Кирилл","#0029",50],["Женя","#0061",490]].map(([n,id,b])=>(
+              <div key={n} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",marginBottom:8,background:topupUser===n?"rgba(57,255,20,0.07)":C.card,border:`1px solid ${topupUser===n?C.neonBorder:"rgba(57,255,20,0.1)"}`,borderRadius:12,cursor:"pointer"}} onClick={()=>setTopupUser(n)}>
                 <div>
-                  <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:C.text,fontWeight:600}}>{n}</div>
+                  <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:topupUser===n?C.neon:C.text,fontWeight:600}}>{n}</div>
                   <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{id}</div>
                 </div>
                 <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:b<100?C.red:C.neon}}>{b} РУБ</div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* MENU EDITOR TAB */}
+        {tab==="menu"&&(
+          <>
+            <SectionHead label="РЕДАКТОР МЕНЮ" color={C.cyan}/>
+            {menuCats.map((cat,ci)=>(
+              <div key={cat.id} style={{marginBottom:16}}>
+                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.cyan,letterSpacing:"0.15em",marginBottom:8}}>{cat.label}</div>
+                {cat.items.map((item,ii)=>(
+                  <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"10px 12px"}}>
+                    <span style={{fontSize:18,flexShrink:0}}>{item.emoji}</span>
+                    <div style={{flex:1,fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.text}}>{item.name}</div>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <input
+                        type="number"
+                        value={item.price}
+                        onChange={e=>{
+                          const newPrice=parseInt(e.target.value)||0;
+                          const updated=menuCats.map((c2,c2i)=>c2i!==ci?c2:{...c2,items:c2.items.map((it,iti)=>iti!==ii?it:{...it,price:newPrice})});
+                          onMenuChange(updated);
+                        }}
+                        style={{width:72,background:"rgba(57,255,20,0.07)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"6px 8px",color:C.neon,fontFamily:"'Bebas Neue',sans-serif",fontSize:18,outline:"none",textAlign:"right",colorScheme:"dark"}}
+                      />
+                      <span style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted}}>РУБ</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
           </>
@@ -1116,38 +1155,26 @@ export default function App(){
   ]);
   const [adminTyping,setAdminTyping]=useState(false);
   const [userTyping,setUserTyping]=useState(false);
+  const [adminUnread,setAdminUnread]=useState(0);
+  const [menuCats,setMenuCats]=useState(MENU_CATS_DEFAULT);
 
   const nowStr=()=>{const d=new Date();return`${d.getHours().toString().padStart(2,"0")}:${d.getMinutes().toString().padStart(2,"0")}`;};
 
-  const adminAutoReplies=["Понял, сейчас разберёмся!","Окей, минуту 👍","Уже иду!","Сделаем 🔥","Принято! Подожди немного.","Без проблем, сейчас помогу!"];
-
-  // User sends message → simulate admin auto-reply if admin panel closed
+  // User sends message — no auto-replies, real admin responds
   const handleUserSend=(text)=>{
     const msg={id:Date.now(),from:"user",text,time:nowStr()};
     setChatMsgs(m=>[...m,msg]);
     setChatUnread(0);
-    if(!showAdmin){
-      setAdminTyping(true);
-      setTimeout(()=>{
-        setAdminTyping(false);
-        setChatMsgs(m=>[...m,{id:Date.now()+1,from:"admin",text:adminAutoReplies[Math.floor(Math.random()*adminAutoReplies.length)],time:nowStr()}]);
-      },1200+Math.random()*600);
-    }
+    // Badge for admin — unread from user side
+    setAdminUnread(u=>u+1);
   };
 
-  // Admin sends message from panel
+  // Admin sends message
   const handleAdminSend=(text)=>{
     const msg={id:Date.now(),from:"admin",text,time:nowStr()};
     setChatMsgs(m=>[...m,msg]);
-    // Simulate user "seen" and typing back after a delay
-    setUserTyping(true);
-    setTimeout(()=>{
-      setUserTyping(false);
-      const userReplies=["Понял, спасибо!","Окей 👍","Хорошо, жду","Отлично!"];
-      setChatMsgs(m=>[...m,{id:Date.now()+1,from:"user",text:userReplies[Math.floor(Math.random()*userReplies.length)],time:nowStr()}]);
-      // Show unread badge if user tab not open
-      setChatUnread(u=>u+1);
-    },1500+Math.random()*800);
+    // If user is not on chat tab, show unread badge
+    setChatUnread(u=>u+1);
   };
 
   const handleBook=(pc)=>{setBookPC(pc);setTab("book");};
@@ -1157,12 +1184,14 @@ export default function App(){
     if(t==="chat")setChatUnread(0);
   };
   const handleBalanceChange=(delta)=>setBalance(b=>Math.max(0,b+delta));
-  const handleOrderNotify=(pc,total,payMethod)=>{
+  const handleOrderNotify=(pc,total,payMethod,items)=>{
     const t=nowStr();
-    setOrders(o=>[...o,{id:Date.now(),pc,total,payMethod,time:t,items:[{name:"Заказ из меню",emoji:"📦",price:total,qty:1}]}]);
+    setOrders(o=>[...o,{id:Date.now(),pc,total,payMethod,time:t,items}]);
     // Push a message into chat notifying admin
-    const note={id:Date.now()+2,from:"user",text:`🛵 Новый заказ к ПК #${pc} на ${total} руб (${payMethod==="balance"?"💳 баланс":"💵 наличные"})`,time:t};
+    const itemList=items.map(i=>`${i.emoji} ${i.name} ×${i.qty}`).join(", ");
+    const note={id:Date.now()+2,from:"user",text:`🛵 ЗАКАЗ к ПК #${pc} | ${itemList} | ${total} руб | ${payMethod==="balance"?"💳 баланс":"💵 наличные"}`,time:t};
     setChatMsgs(m=>[...m,note]);
+    setAdminUnread(u=>u+1);
   };
   const handleDeliverOrder=(id)=>setOrders(o=>o.filter(x=>x.id!==id));
   const handleTopupUser=(user,amount)=>{if(user==="Артём")handleBalanceChange(amount);};
@@ -1198,7 +1227,7 @@ export default function App(){
           <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,position:"relative"}}>
             {tab==="map"&&<MapScreen onBook={handleBook}/>}
             {tab==="book"&&<BookScreen preSelected={bookPC}/>}
-            {tab==="menu"&&<MenuScreen balance={balance} onBalanceChange={handleBalanceChange} onOrderNotify={handleOrderNotify}/>}
+            {tab==="menu"&&<MenuScreen balance={balance} onBalanceChange={handleBalanceChange} onOrderNotify={handleOrderNotify} menuCats={menuCats}/>}
             {tab==="chat"&&<ChatScreen msgs={chatMsgs} onUserSend={handleUserSend} onRead={()=>setChatUnread(0)} adminTyping={adminTyping}/>}
             {tab==="profile"&&<ProfileScreen balance={balance} onBalanceChange={handleBalanceChange}/>}
             {tab==="tariffs"&&<TariffsScreen/>}
@@ -1224,6 +1253,10 @@ export default function App(){
             chatMsgs={chatMsgs}
             onAdminSend={handleAdminSend}
             userTyping={userTyping}
+            balance={balance}
+            adminUnread={adminUnread}
+            menuCats={menuCats}
+            onMenuChange={setMenuCats}
           />
         )}
       </div>
