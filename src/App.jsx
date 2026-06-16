@@ -1,4 +1,89 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPABASE CLIENT
+// ─────────────────────────────────────────────────────────────────────────────
+const SUPABASE_URL = "https://pyjqtkngvdajpsgiwcdm.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5anF0a25ndmRhanBzZ2l3Y2RtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MzcxMjEsImV4cCI6MjA5NzIxMzEyMX0.iXKKfKSxv_QTiF9J0hSh2vDlylHai1AwfIEvHJCKxWQ";
+
+const sb = {
+  from: (table) => ({
+    _table: table,
+    _filters: [],
+    _order: null,
+    _limit: null,
+    select(cols="*") { return {...this, _select: cols, _method:"select"}; },
+    insert(data) { return {...this, _data: data, _method:"insert"}; },
+    update(data) { return {...this, _data: data, _method:"update"}; },
+    delete() { return {...this, _method:"delete"}; },
+    eq(col, val) { return {...this, _filters:[...this._filters, {col,val,op:"eq"}]}; },
+    order(col, {ascending=true}={}) { return {...this, _order:{col,ascending}}; },
+    limit(n) { return {...this, _limit:n}; },
+    single() { return {...this, _single:true}; },
+    async then(resolve, reject) {
+      try {
+        const headers = {
+          "Content-Type":"application/json",
+          "apikey": SUPABASE_KEY,
+          "Authorization": "Bearer " + SUPABASE_KEY,
+          "Prefer": this._method==="insert" ? "return=representation" : "",
+        };
+        let url = SUPABASE_URL + "/rest/v1/" + this._table;
+        if (this._select) url += "?select=" + this._select;
+        if (this._filters.length) {
+          const sep = url.includes("?") ? "&" : "?";
+          url += sep + this._filters.map(f => f.col + "=eq." + encodeURIComponent(f.val)).join("&");
+        }
+        if (this._order) {
+          const sep = url.includes("?") ? "&" : "?";
+          url += sep + "order=" + this._order.col + "." + (this._order.ascending?"asc":"desc");
+        }
+        if (this._limit) {
+          const sep = url.includes("?") ? "&" : "?";
+          url += sep + "limit=" + this._limit;
+        }
+        if (this._single) headers["Accept"] = "application/vnd.pgrst.object+json";
+
+        const method = {select:"GET",insert:"POST",update:"PATCH",delete:"DELETE"}[this._method||"select"];
+        const res = await fetch(url, {
+          method,
+          headers,
+          body: this._data ? JSON.stringify(this._data) : undefined,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(()=>({}));
+          resolve({data:null, error: err});
+          return;
+        }
+        const data = method==="DELETE" ? null : await res.json().catch(()=>null);
+        resolve({data, error:null});
+      } catch(e) {
+        resolve({data:null, error:e});
+      }
+    }
+  }),
+  rpc: async (fn, params={}) => {
+    const res = await fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, {
+      method:"POST",
+      headers:{"Content-Type":"application/json","apikey":SUPABASE_KEY,"Authorization":"Bearer "+SUPABASE_KEY},
+      body: JSON.stringify(params),
+    });
+    const data = await res.json().catch(()=>null);
+    return {data, error: res.ok ? null : data};
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TELEGRAM USER
+// ─────────────────────────────────────────────────────────────────────────────
+const getTgUser = () => {
+  const tg = window.Telegram?.WebApp?.initDataUnsafe?.user;
+  if (tg) return { id: tg.id, first_name: tg.first_name || "Игрок", username: tg.username || "" };
+  // Dev fallback — random id so multiple testers work
+  const devId = parseInt(localStorage.getItem("dev_tg_id") || String(100000 + Math.floor(Math.random()*900000)));
+  localStorage.setItem("dev_tg_id", String(devId));
+  return { id: devId, first_name: "Игрок_" + String(devId).slice(-3), username: "" };
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GLOBAL STYLES
@@ -685,18 +770,31 @@ function ChatScreen({msgs,onUserSend,onRead,adminTyping}){
 // ─────────────────────────────────────────────────────────────────────────────
 // PROFILE SCREEN (with balance top-up)
 // ─────────────────────────────────────────────────────────────────────────────
-function ProfileScreen({balance,onBalanceChange}){
-  const [showTopup,setShowTopup]=useState(false);
-  const history=[
-    {date:"14 ИЮН",pc:7,hours:3,cost:90,game:"CS2"},
-    {date:"11 ИЮН",pc:12,hours:2,cost:60,game:"Dota 2"},
-    {date:"8 ИЮН",pc:3,hours:4,cost:120,game:"Valorant"},
-  ];
-  const balanceHistory=[
-    {date:"14 ИЮН",type:"top",amount:500,method:"Пополнение от админа"},
-    {date:"11 ИЮН",type:"spend",amount:-60,method:"Заказ: Бургер + Кола"},
-    {date:"8 ИЮН",type:"top",amount:200,method:"Пополнение от админа"},
-  ];
+function ProfileScreen({user,balance,activeSession,timeLeft}){
+  const [topups,setTopups]=useState([]);
+
+  useEffect(()=>{
+    if(!user)return;
+    sb.from("topups").select("*").eq("user_id",user.id).order("created_at",{ascending:false}).limit(10)
+      .then(({data})=>{if(data)setTopups(data);});
+  },[user]);
+
+  const fmtTime=(secs)=>{
+    if(secs==null)return"--:--";
+    const h=Math.floor(secs/3600);
+    const m=Math.floor((secs%3600)/60);
+    const s=secs%60;
+    if(h>0)return`${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+    return`${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+  };
+
+  const sessionProgress=activeSession&&timeLeft!=null
+    ? Math.max(0,Math.min(100,100-(timeLeft/(activeSession.duration_hours*3600)*100)))
+    : 0;
+
+  const name=(user?.display_name||user?.first_name||"Игрок").toUpperCase();
+  const memberId=user?.id?String(user.id).slice(-4).padStart(4,"0"):"????";
+  const joinDate=user?.created_at?new Date(user.created_at).toLocaleDateString("ru",{month:"long",year:"numeric"}):"";
 
   return(
     <div style={{overflowY:"auto",flex:1,padding:"0 18px"}}>
@@ -706,18 +804,12 @@ function ProfileScreen({balance,onBalanceChange}){
         <div style={{display:"flex",alignItems:"center",gap:14}}>
           <div style={{width:60,height:60,borderRadius:16,background:"linear-gradient(135deg,#1a4d00,#2d8500)",border:`2px solid ${C.neon}50`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,boxShadow:`0 0 16px ${C.neonGlow}`,flexShrink:0}}>👾</div>
           <div>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:C.text,lineHeight:1}}>АРТЁМ</div>
-            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.neon,marginTop:3,letterSpacing:"0.15em"}}>MEMBER #0041</div>
-            <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted,marginTop:2}}>С нами с января 2024</div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:C.text,lineHeight:1}}>{name}</div>
+            {user?.username&&<div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,marginTop:2}}>@{user.username}</div>}
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.neon,marginTop:3,letterSpacing:"0.15em"}}>MEMBER #{memberId}</div>
+            {joinDate&&<div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted,marginTop:2}}>С нами с {joinDate}</div>}
+            {user?.admin_note&&<div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.yellow,marginTop:4}}>📝 {user.admin_note}</div>}
           </div>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginTop:16}}>
-          {[["47 Ч","ВСЕГО"],["18","СЕССИЙ"],["5 600","ПОТРАЧЕНО"]].map(([v,l])=>(
-            <div key={l} style={{textAlign:"center"}}>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:C.neon,lineHeight:1}}>{v}</div>
-              <div style={{fontFamily:"'Oswald',sans-serif",fontSize:9,color:C.muted,letterSpacing:"0.12em",marginTop:2}}>{l}</div>
-            </div>
-          ))}
         </div>
       </div>
 
@@ -729,79 +821,55 @@ function ProfileScreen({balance,onBalanceChange}){
             <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.18em"}}>МОЙ БАЛАНС</div>
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:46,color:C.neon,lineHeight:1,marginTop:4,textShadow:`0 0 20px ${C.neonGlow}`}}>{balance}<span style={{fontSize:20}}> РУБ</span></div>
           </div>
-          <button onClick={()=>setShowTopup(!showTopup)} style={{background:"rgba(57,255,20,0.12)",border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"9px 16px",color:C.neon,cursor:"pointer",fontFamily:"'Oswald',sans-serif",fontSize:12,letterSpacing:"0.1em",flexShrink:0}}>
-            + ПОПОЛНИТЬ
-          </button>
         </div>
-        {showTopup&&(
-          <div className="slide-up" style={{marginTop:14,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:14}}>
-            <div style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>
-              💳 Пополнение через администратора.<br/>
-              Подойди на стойку или напиши в чат — мы зачислим деньги на твой баланс.
-            </div>
-            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.12em",marginBottom:8}}>БЫСТРЫЕ СУММЫ</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
-              {[100,200,500,1000].map(amt=>(
-                <button key={amt} onClick={()=>onBalanceChange(amt)} style={{background:"rgba(57,255,20,0.08)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"10px 0",color:C.neon,cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:16,boxShadow:`0 0 8px ${C.neonGlow}`}}>
-                  {amt}
-                </button>
-              ))}
-            </div>
-            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,marginTop:10,textAlign:"center"}}>
-              * Реальное пополнение производит администратор
-            </div>
+        <div style={{marginTop:12,background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:12,padding:14}}>
+          <div style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:C.muted,lineHeight:1.6}}>
+            💳 Для пополнения баланса обратись к администратору или напиши в чат.
+          </div>
+        </div>
+        {topups.length>0&&(
+          <div style={{marginTop:14}}>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>ИСТОРИЯ ПОПОЛНЕНИЙ</div>
+            {topups.map((h,i)=>(
+              <div key={h.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:i<topups.length-1?"1px solid rgba(57,255,20,0.06)":"none"}}>
+                <div>
+                  <div style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.text}}>{h.note||"Пополнение"}</div>
+                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{new Date(h.created_at).toLocaleDateString("ru")}</div>
+                </div>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.neon}}>+{h.amount} Р</div>
+              </div>
+            ))}
           </div>
         )}
-
-        {/* Balance history */}
-        <div style={{marginTop:14}}>
-          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.15em",marginBottom:8}}>ИСТОРИЯ БАЛАНСА</div>
-          {balanceHistory.map((h,i)=>(
-            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:i<balanceHistory.length-1?"1px solid rgba(57,255,20,0.06)":"none"}}>
-              <div>
-                <div style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.text}}>{h.method}</div>
-                <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{h.date}</div>
-              </div>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:h.type==="top"?C.neon:C.red}}>
-                {h.type==="top"?"+":""}{h.amount} Р
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Active session */}
-      <div style={{marginTop:12,background:"rgba(57,255,20,0.06)",border:`1px solid ${C.neonBorder}`,borderRadius:14,padding:16}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-          <div style={{display:"flex",alignItems:"center",gap:7}}>
-            <div style={{width:7,height:7,borderRadius:"50%",background:C.neon,boxShadow:`0 0 6px ${C.neon}`}} className="blink"/>
-            <span style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.neon,letterSpacing:"0.1em",fontWeight:600}}>АКТИВНАЯ СЕССИЯ</span>
+      {activeSession?(
+        <div style={{marginTop:12,background:"rgba(57,255,20,0.07)",border:`1px solid ${C.neonBorder}`,borderRadius:14,padding:16,boxShadow:`0 0 20px ${C.neonGlow}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:7}}>
+              <div style={{width:7,height:7,borderRadius:"50%",background:C.neon,boxShadow:`0 0 6px ${C.neon}`}} className="blink"/>
+              <span style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.neon,letterSpacing:"0.1em",fontWeight:600}}>АКТИВНАЯ СЕССИЯ</span>
+            </div>
+            <span style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.muted}}>ПК #{activeSession.pc_number}</span>
           </div>
-          <span style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.muted}}>ПК #7 · CS2</span>
-        </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:10}}>
-          <div>
-            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.1em"}}>ОСТАЛОСЬ</div>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:36,color:C.text,lineHeight:1}}>1:42</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:10}}>
+            <div>
+              <div style={{fontFamily:"'Oswald',sans-serif",fontSize:10,color:C.muted,letterSpacing:"0.1em"}}>ОСТАЛОСЬ</div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:36,color:timeLeft<300?C.red:C.text,lineHeight:1}}>{fmtTime(timeLeft)}</div>
+            </div>
+            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.muted}}>из {activeSession.duration_hours} ч.</div>
           </div>
-          <button style={{background:"rgba(57,255,20,0.08)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"8px 14px",fontFamily:"'Oswald',sans-serif",fontSize:11,color:C.neon,cursor:"pointer",letterSpacing:"0.08em"}}>+ ПРОДЛИТЬ</button>
-        </div>
-        <div style={{height:4,borderRadius:4,background:"rgba(57,255,20,0.12)"}}>
-          <div style={{width:"58%",height:"100%",borderRadius:4,background:C.neon,boxShadow:`0 0 6px ${C.neon}`}}/>
-        </div>
-      </div>
-
-      <SectionHead label="ИСТОРИЯ СЕССИЙ"/>
-      {history.map((h,i)=>(
-        <div key={i} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,background:C.card,border:"1px solid rgba(57,255,20,0.09)",borderRadius:12,padding:"12px 16px"}}>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,color:C.neon,letterSpacing:"0.1em",minWidth:46,lineHeight:1.2}}>{h.date}</div>
-          <div style={{flex:1}}>
-            <div style={{fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.text,fontWeight:600}}>ПК #{h.pc} · {h.game}</div>
-            <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{h.hours} ч.</div>
+          <div style={{height:4,borderRadius:4,background:"rgba(57,255,20,0.12)"}}>
+            <div style={{width:`${sessionProgress}%`,height:"100%",borderRadius:4,background:timeLeft<300?C.red:C.neon,boxShadow:`0 0 6px ${timeLeft<300?C.red:C.neon}`,transition:"width 1s linear"}}/>
           </div>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.neon}}>{h.cost} РУБ</div>
         </div>
-      ))}
+      ):(
+        <div style={{marginTop:12,background:C.card,border:"1px solid rgba(57,255,20,0.1)",borderRadius:14,padding:16,textAlign:"center"}}>
+          <div style={{fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.muted}}>Нет активной сессии</div>
+          <div style={{fontFamily:"'Inter',sans-serif",fontSize:11,color:C.muted,marginTop:4}}>Забронируй компьютер во вкладке ⚡</div>
+        </div>
+      )}
       <div style={{height:90}}/>
     </div>
   );
@@ -866,12 +934,12 @@ function AdminPinGate({onSuccess,onCancel}){
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN PANEL
 // ─────────────────────────────────────────────────────────────────────────────
-function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminSend,userTyping,balance,adminUnread,menuCats,onMenuChange}){
+function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminSend,allUsers=[],adminUnread,onAdminChatOpen,menuCats,onMenuChange,balance}){
   const [tab,setTab]=useState("orders");
   const [topupAmt,setTopupAmt]=useState("200");
-  const [topupUser,setTopupUser]=useState("Артём");
 
-  const users=["Артём","Саша","Влад","Кирилл","Женя"];
+  const [selectedUserId,setSelectedUserId]=useState(null);
+  const selectedUser=allUsers.find(u=>u.id===selectedUserId)||allUsers[0];
 
   return(
     <div style={{
@@ -907,9 +975,9 @@ function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminS
         {tab==="chat"&&(
           <ChatUI
             msgs={chatMsgs}
-            onSend={onAdminSend}
+            onSend={(text)=>onAdminSend(text, selectedUser?.id)}
             isAdmin={true}
-            typing={userTyping}
+            typing={false}
             quickReplies={["Уже несу! 🛵","Окей, минуту 👍","Уточни ПК?","Готово ✅"]}
           />
         )}
@@ -960,8 +1028,9 @@ function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminS
             <div style={{background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:14,padding:18}}>
               <div style={{marginBottom:14}}>
                 <label style={{fontFamily:"'Oswald',sans-serif",fontSize:10,letterSpacing:"0.18em",color:C.muted,display:"block",marginBottom:7}}>ИГРОК</label>
-                <select value={topupUser} onChange={e=>setTopupUser(e.target.value)} style={{width:"100%",background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none",appearance:"none",colorScheme:"dark"}}>
-                  {users.map(u=><option key={u} value={u}>{u}</option>)}
+                <select value={selectedUserId||""} onChange={e=>setSelectedUserId(parseInt(e.target.value))} style={{width:"100%",background:C.card,border:`1px solid ${C.neonBorder}`,borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Inter',sans-serif",outline:"none",appearance:"none",colorScheme:"dark"}}>
+                  <option value="">Выбери игрока...</option>
+                  {allUsers.map(u=><option key={u.id} value={u.id}>{u.display_name||u.first_name}{u.username?" (@"+u.username+")":""}</option>)}
                 </select>
               </div>
               <div style={{marginBottom:14}}>
@@ -974,7 +1043,7 @@ function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminS
                   <button key={a} onClick={()=>setTopupAmt(String(a))} style={{background:"rgba(57,255,20,0.07)",border:`1px solid ${C.neonBorder}`,borderRadius:8,padding:"9px 0",color:C.neon,cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:16}}>{a}</button>
                 ))}
               </div>
-              <button onClick={()=>{if(topupAmt>0){onTopupUser(topupUser,parseInt(topupAmt));setTopupAmt("200");}}} style={{
+              <button onClick={()=>{if(topupAmt>0&&selectedUserId){onTopupUser(selectedUserId,parseInt(topupAmt));setTopupAmt("200");}}} style={{
                 width:"100%",background:`linear-gradient(90deg,#1a4d00,#2d8500)`,border:`1px solid ${C.neon}60`,
                 borderRadius:12,padding:"14px",fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
                 color:C.neon,cursor:"pointer",boxShadow:`0 0 18px rgba(57,255,20,0.2)`,textShadow:`0 0 8px ${C.neon}`,
@@ -982,14 +1051,15 @@ function AdminPanel({orders,onClose,onDeliverOrder,onTopupUser,chatMsgs,onAdminS
             </div>
 
             <SectionHead label="БАЛАНСЫ ИГРОКОВ" color={C.muted}/>
-            {/* Артём — живой баланс из стейта; остальные — заглушки */}
-            {[["Артём","#0041",balance],["Саша","#0038",320],["Влад","#0055",1200],["Кирилл","#0029",50],["Женя","#0061",490]].map(([n,id,b])=>(
-              <div key={n} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",marginBottom:8,background:topupUser===n?"rgba(57,255,20,0.07)":C.card,border:`1px solid ${topupUser===n?C.neonBorder:"rgba(57,255,20,0.1)"}`,borderRadius:12,cursor:"pointer"}} onClick={()=>setTopupUser(n)}>
+            {allUsers.length===0&&<div style={{textAlign:"center",padding:"20px 0",fontFamily:"'Oswald',sans-serif",fontSize:13,color:C.muted}}>Нет зарегистрированных игроков</div>}
+            {allUsers.map(u=>(
+              <div key={u.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",marginBottom:8,background:selectedUserId===u.id?"rgba(57,255,20,0.09)":C.card,border:`1px solid ${selectedUserId===u.id?C.neonBorder:"rgba(57,255,20,0.1)"}`,borderRadius:12,cursor:"pointer"}} onClick={()=>setSelectedUserId(u.id)}>
                 <div>
-                  <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:topupUser===n?C.neon:C.text,fontWeight:600}}>{n}</div>
-                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{id}</div>
+                  <div style={{fontFamily:"'Oswald',sans-serif",fontSize:14,color:selectedUserId===u.id?C.neon:C.text,fontWeight:600}}>{u.display_name||u.first_name}</div>
+                  <div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.muted}}>{u.username?"@"+u.username:""} · ID {u.id}</div>
+                  {u.admin_note?<div style={{fontFamily:"'Inter',sans-serif",fontSize:10,color:C.yellow,marginTop:2}}>📝 {u.admin_note}</div>:null}
                 </div>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:b<100?C.red:C.neon}}>{b} РУБ</div>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:(u.balance||0)<100?C.red:C.neon}}>{u.balance||0} РУБ</div>
               </div>
             ))}
           </>
@@ -1140,63 +1210,185 @@ function EventsScreen(){
 export default function App(){
   const [tab,setTab]=useState("map");
   const [bookPC,setBookPC]=useState(null);
-  const [balance,setBalance]=useState(850);
-  const [chatUnread,setChatUnread]=useState(2);
   const [showAdmin,setShowAdmin]=useState(false);
   const [showPinGate,setShowPinGate]=useState(false);
-  const [orders,setOrders]=useState([]);
   const [logoTaps,setLogoTaps]=useState(0);
   const [logoTimer,setLogoTimer]=useState(null);
-
-  // Shared chat state — both user and admin see same messages
-  const [chatMsgs,setChatMsgs]=useState([
-    {id:1,from:"admin",text:"Привет! Чем могу помочь? 👾",time:"19:41"},
-    {id:2,from:"admin",text:"Если что-то нужно — пиши, я рядом 🟢",time:"19:41"},
-  ]);
-  const [adminTyping,setAdminTyping]=useState(false);
-  const [userTyping,setUserTyping]=useState(false);
-  const [adminUnread,setAdminUnread]=useState(0);
   const [menuCats,setMenuCats]=useState(MENU_CATS_DEFAULT);
+
+  // ── USER ──────────────────────────────────────────────────────────────────
+  const [user,setUser]=useState(null);        // {id, first_name, username, display_name, balance, admin_note}
+  const [loading,setLoading]=useState(true);
+
+  // ── CHAT ─────────────────────────────────────────────────────────────────
+  const [chatMsgs,setChatMsgs]=useState([]);
+  const [chatUnread,setChatUnread]=useState(0);
+  const [adminUnread,setAdminUnread]=useState(0);
+  const chatPollRef=useRef(null);
+
+  // ── ORDERS ────────────────────────────────────────────────────────────────
+  const [orders,setOrders]=useState([]);
+
+  // ── SESSION TIMER ─────────────────────────────────────────────────────────
+  const [activeSession,setActiveSession]=useState(null); // {pc_number, ends_at, duration_hours, started_at}
+  const [timeLeft,setTimeLeft]=useState(null);           // seconds remaining
+  const timerRef=useRef(null);
 
   const nowStr=()=>{const d=new Date();return`${d.getHours().toString().padStart(2,"0")}:${d.getMinutes().toString().padStart(2,"0")}`;};
 
-  // User sends message — no auto-replies, real admin responds
-  const handleUserSend=(text)=>{
-    const msg={id:Date.now(),from:"user",text,time:nowStr()};
-    setChatMsgs(m=>[...m,msg]);
-    setChatUnread(0);
-    // Badge for admin — unread from user side
-    setAdminUnread(u=>u+1);
+  // ── INIT: register/load user from Supabase ────────────────────────────────
+  useEffect(()=>{
+    const init=async()=>{
+      const tg=getTgUser();
+      // Try to find existing user
+      const {data:existing}=await sb.from("users").select("*").eq("id",tg.id).single();
+      if(existing&&!existing.error){
+        setUser(existing);
+      } else {
+        // Create new user
+        const newUser={id:tg.id,first_name:tg.first_name,username:tg.username,display_name:tg.first_name,balance:0,admin_note:""};
+        const {data:created}=await sb.from("users").insert(newUser);
+        setUser(created?.[0]||newUser);
+      }
+      setLoading(false);
+    };
+    init();
+  },[]);
+
+  // ── LOAD ACTIVE SESSION ───────────────────────────────────────────────────
+  useEffect(()=>{
+    if(!user)return;
+    const loadSession=async()=>{
+      const {data}=await sb.from("sessions").select("*").eq("user_id",user.id).eq("active",true).single();
+      if(data&&!data.error){
+        setActiveSession(data);
+        // Check if still valid
+        const endsAt=new Date(data.ends_at);
+        if(endsAt<=new Date()){
+          // Session expired — mark inactive
+          await sb.from("sessions").update({active:false}).eq("id",data.id);
+          setActiveSession(null);
+        }
+      }
+    };
+    loadSession();
+  },[user]);
+
+  // ── SESSION COUNTDOWN TIMER ───────────────────────────────────────────────
+  useEffect(()=>{
+    if(timerRef.current)clearInterval(timerRef.current);
+    if(!activeSession)return;
+    const tick=()=>{
+      const remaining=Math.max(0,Math.floor((new Date(activeSession.ends_at)-new Date())/1000));
+      setTimeLeft(remaining);
+      if(remaining===0){
+        clearInterval(timerRef.current);
+        setActiveSession(null);
+      }
+    };
+    tick();
+    timerRef.current=setInterval(tick,1000);
+    return()=>clearInterval(timerRef.current);
+  },[activeSession]);
+
+  // ── LOAD CHAT ─────────────────────────────────────────────────────────────
+  const loadChat=useCallback(async()=>{
+    if(!user)return;
+    const {data}=await sb.from("messages").select("*").eq("user_id",user.id).order("created_at",{ascending:true}).limit(100);
+    if(data){
+      const msgs=data.map(m=>({
+        id:m.id,from:m.from_admin?"admin":"user",
+        text:m.text,
+        time:new Date(m.created_at).toLocaleTimeString("ru",{hour:"2-digit",minute:"2-digit"}),
+      }));
+      setChatMsgs(msgs);
+    }
+  },[user]);
+
+  useEffect(()=>{
+    if(!user)return;
+    loadChat();
+    // Poll for new messages every 3s
+    chatPollRef.current=setInterval(loadChat,3000);
+    return()=>clearInterval(chatPollRef.current);
+  },[user,loadChat]);
+
+  // ── LOAD ORDERS (for admin) ───────────────────────────────────────────────
+  const loadOrders=async()=>{
+    const {data}=await sb.from("orders").select("*").eq("status","pending").order("created_at",{ascending:false});
+    if(data)setOrders(data.map(o=>({...o,pc:o.pc_number,payMethod:o.pay_method,time:new Date(o.created_at).toLocaleTimeString("ru",{hour:"2-digit",minute:"2-digit"})})));
   };
 
-  // Admin sends message
-  const handleAdminSend=(text)=>{
-    const msg={id:Date.now(),from:"admin",text,time:nowStr()};
-    setChatMsgs(m=>[...m,msg]);
-    // If user is not on chat tab, show unread badge
+  useEffect(()=>{
+    if(!showAdmin)return;
+    loadOrders();
+    const t=setInterval(loadOrders,5000);
+    return()=>clearInterval(t);
+  },[showAdmin]);
+
+  // ── LOAD ALL USERS FOR ADMIN ──────────────────────────────────────────────
+  const [allUsers,setAllUsers]=useState([]);
+  useEffect(()=>{
+    if(!showAdmin)return;
+    sb.from("users").select("*").order("created_at",{ascending:false}).then(({data})=>{if(data)setAllUsers(data);});
+  },[showAdmin]);
+
+  // ── HANDLERS ─────────────────────────────────────────────────────────────
+  const handleUserSend=async(text)=>{
+    if(!user)return;
+    const msg={user_id:user.id,from_admin:false,text};
+    await sb.from("messages").insert(msg);
+    setAdminUnread(u=>u+1);
+    loadChat();
+  };
+
+  const handleAdminSend=async(text,targetUserId)=>{
+    const uid=targetUserId||allUsers[0]?.id||user?.id;
+    if(!uid)return;
+    await sb.from("messages").insert({user_id:uid,from_admin:true,text});
     setChatUnread(u=>u+1);
+    loadChat();
   };
 
-  const handleBook=(pc)=>{setBookPC(pc);setTab("book");};
-  const handleTabChange=(t)=>{
-    setTab(t);
-    if(t!=="book")setBookPC(null);
-    if(t==="chat")setChatUnread(0);
+  const handleBalanceChange=async(delta)=>{
+    if(!user)return;
+    const newBal=Math.max(0,(user.balance||0)+delta);
+    await sb.from("users").update({balance:newBal}).eq("id",user.id);
+    setUser(u=>({...u,balance:newBal}));
   };
-  const handleBalanceChange=(delta)=>setBalance(b=>Math.max(0,b+delta));
-  const handleOrderNotify=(pc,total,payMethod,items)=>{
-    const t=nowStr();
-    setOrders(o=>[...o,{id:Date.now(),pc,total,payMethod,time:t,items}]);
-    // Push a message into chat notifying admin
+
+  const handleOrderNotify=async(pc,total,payMethod,items)=>{
+    if(!user)return;
+    await sb.from("orders").insert({user_id:user.id,pc_number:pc,items,total,pay_method:payMethod,status:"pending"});
     const itemList=items.map(i=>`${i.emoji} ${i.name} ×${i.qty}`).join(", ");
-    const note={id:Date.now()+2,from:"user",text:`🛵 ЗАКАЗ к ПК #${pc} | ${itemList} | ${total} руб | ${payMethod==="balance"?"💳 баланс":"💵 наличные"}`,time:t};
-    setChatMsgs(m=>[...m,note]);
+    await sb.from("messages").insert({user_id:user.id,from_admin:false,text:`🛵 ЗАКАЗ к ПК #${pc} | ${itemList} | ${total} руб | ${payMethod==="balance"?"💳 баланс":"💵 наличные"}`});
     setAdminUnread(u=>u+1);
+    loadChat();
   };
-  const handleDeliverOrder=(id)=>setOrders(o=>o.filter(x=>x.id!==id));
-  const handleTopupUser=(user,amount)=>{if(user==="Артём")handleBalanceChange(amount);};
 
-  // Secret admin tap: logo 5x → PIN gate
+  const handleDeliverOrder=async(id)=>{
+    await sb.from("orders").update({status:"delivered"}).eq("id",id);
+    setOrders(o=>o.filter(x=>x.id!==id));
+  };
+
+  const handleTopupUser=async(targetUserId,amount)=>{
+    const target=allUsers.find(u=>u.id===targetUserId);
+    if(!target)return;
+    const newBal=(target.balance||0)+amount;
+    await sb.from("users").update({balance:newBal}).eq("id",targetUserId);
+    await sb.from("topups").insert({user_id:targetUserId,amount,note:"Пополнение от админа"});
+    setAllUsers(us=>us.map(u=>u.id===targetUserId?{...u,balance:newBal}:u));
+    if(user&&user.id===targetUserId)setUser(u=>({...u,balance:newBal}));
+  };
+
+  const handleBookSession=async(pcId,durationHours)=>{
+    if(!user)return;
+    const startedAt=new Date();
+    const endsAt=new Date(startedAt.getTime()+durationHours*3600*1000);
+    const {data}=await sb.from("sessions").insert({user_id:user.id,pc_number:pcId,started_at:startedAt.toISOString(),duration_hours:durationHours,ends_at:endsAt.toISOString(),active:true});
+    if(data?.[0])setActiveSession(data[0]);
+  };
+
   const handleLogoTap=()=>{
     if(logoTimer)clearTimeout(logoTimer);
     const newTaps=logoTaps+1;
@@ -1206,7 +1398,29 @@ export default function App(){
     setLogoTimer(t);
   };
 
+  const handleTabChange=(t)=>{
+    setTab(t);
+    if(t!=="book")setBookPC(null);
+    if(t==="chat")setChatUnread(0);
+  };
+
   const navTab=["map","book","menu","chat","profile"].includes(tab)?tab:"map";
+  const balance=user?.balance||0;
+
+  if(loading) return(
+    <>
+      <GlobalStyle/>
+      <div style={{height:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:C.neon,letterSpacing:"0.04em",textShadow:`0 0 20px ${C.neonGlow}`}} className="glitch">
+          <span style={{color:C.neon}}>LEVEL</span> UP
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          {[0,1,2].map(i=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:C.neon,animation:`blink 1.2s ${i*0.3}s infinite`}}/>)}
+        </div>
+        <div style={{fontFamily:"'Oswald',sans-serif",fontSize:12,color:C.muted,letterSpacing:"0.2em"}}>ПОДКЛЮЧЕНИЕ...</div>
+      </div>
+    </>
+  );
 
   return(
     <>
@@ -1225,11 +1439,11 @@ export default function App(){
             <Logo balance={balance} onBalanceTap={()=>handleTabChange("profile")}/>
           </div>
           <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,position:"relative"}}>
-            {tab==="map"&&<MapScreen onBook={handleBook}/>}
-            {tab==="book"&&<BookScreen preSelected={bookPC}/>}
+            {tab==="map"&&<MapScreen onBook={(pc)=>{setBookPC(pc);setTab("book");}}/>}
+            {tab==="book"&&<BookScreen preSelected={bookPC} onSessionBooked={handleBookSession}/>}
             {tab==="menu"&&<MenuScreen balance={balance} onBalanceChange={handleBalanceChange} onOrderNotify={handleOrderNotify} menuCats={menuCats}/>}
-            {tab==="chat"&&<ChatScreen msgs={chatMsgs} onUserSend={handleUserSend} onRead={()=>setChatUnread(0)} adminTyping={adminTyping}/>}
-            {tab==="profile"&&<ProfileScreen balance={balance} onBalanceChange={handleBalanceChange}/>}
+            {tab==="chat"&&<ChatScreen msgs={chatMsgs} onUserSend={handleUserSend} onRead={()=>setChatUnread(0)} adminTyping={false}/>}
+            {tab==="profile"&&<ProfileScreen user={user} balance={balance} activeSession={activeSession} timeLeft={timeLeft}/>}
             {tab==="tariffs"&&<TariffsScreen/>}
             {tab==="events"&&<EventsScreen/>}
           </div>
@@ -1237,7 +1451,6 @@ export default function App(){
 
         <BottomNav active={navTab} onChange={handleTabChange} chatUnread={chatUnread}/>
 
-        {/* PIN gate appears first, admin panel behind it */}
         {showPinGate&&!showAdmin&&(
           <AdminPinGate
             onSuccess={()=>{setShowPinGate(false);setShowAdmin(true);}}
@@ -1252,11 +1465,12 @@ export default function App(){
             onTopupUser={handleTopupUser}
             chatMsgs={chatMsgs}
             onAdminSend={handleAdminSend}
-            userTyping={userTyping}
-            balance={balance}
+            allUsers={allUsers}
             adminUnread={adminUnread}
+            onAdminChatOpen={()=>setAdminUnread(0)}
             menuCats={menuCats}
             onMenuChange={setMenuCats}
+            balance={balance}
           />
         )}
       </div>
