@@ -10,7 +10,7 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 // TELEGRAM BOT — send notifications to user's private chat
 // ─────────────────────────────────────────────────────────────────────────────
 // Edge Function endpoint — keeps bot token & admin PIN on the server (not in this code)
-const API_FN = SUPABASE_URL + "/functions/v1/api";
+const API_FN = SUPABASE_URL + "/functions/v1/dynamic-worker";
 
 // Sends a Telegram message via the Edge Function (browser can't call Telegram directly — CORS)
 const sendBotMessage = async (chatId, text) => {
